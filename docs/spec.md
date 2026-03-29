@@ -1,10 +1,11 @@
-# Design Specification: Graph-Aware Adversarial Robustness Framework for Network Intrusion Detection
+# Design Specification: Timing-Aware Adversarial Attacks on Temporal GNN-based Network Intrusion Detection Systems
 
 > Iterative specification — each section builds on the previous. Implement in the order defined in [Section 7](#7-milestones-and-deliverables).
 
-**Version:** 0.2.0
+**Version:** 0.3.0
 **Status:** Draft
 **Last Updated:** 2026-03
+**Target Venue:** NDSS 2027 / USENIX Security 2027（備選：IEEE TIFS、RAID 2026）
 
 ---
 
@@ -39,23 +40,32 @@
 
 ### 1.1 Problem Statement
 
-ML-based Network Intrusion Detection Systems (NIDS) achieve high accuracy on clean benchmark data but remain vulnerable to adversarial evasion attacks. Existing adversarial example generation methods for NIDS suffer from a fundamental limitation: they operate purely in feature space without enforcing network protocol constraints, producing perturbations that are mathematically effective but physically unrealizable in actual network traffic.
+ML-based Network Intrusion Detection Systems (NIDS) achieve high accuracy on clean benchmark data but remain vulnerable to adversarial evasion. Prior adversarial work on NIDS suffers from two compounding limitations:
 
-Furthermore, the majority of prior work targets static ML models (DNN, RF, SVM). The adversarial robustness of **graph-based** NIDS — which model traffic as relational structures between communicating endpoints — has not been systematically studied. In particular, no prior work has examined whether **temporal graph models** (e.g., TGAT, TGN) offer inherently stronger resistance to adversarial perturbations compared to static graph models (e.g., GraphSAGE, GAT), or whether they introduce new attack surfaces through their node memory mechanisms.
+**Limitation 1: Unrealistic perturbations.** Existing methods operate purely in feature space without enforcing network protocol constraints, generating samples that are mathematically effective but physically unrealizable — violating TCP state machines or creating algebraically inconsistent derived features. This systematically overestimates reported attack success rates.
+
+**Limitation 2: Unexplored temporal attack surface.** The majority of prior work targets static models (DNN, RF, SVM) or, at most, static GNNs. Temporal GNNs (TGAT, TGN) have been proposed to improve NIDS by incorporating historical behavior via node memory modules — but their adversarial security has not been studied. We identify and formally characterize two novel attack vectors that are **unique to temporal GNNs**:
+
+- **Timing-Aware Edge Injection (TAEI):** The optimal time to inject adversarial edges is a exploitable optimization variable. Injecting edges before a target attack event — at the right temporal offset — amplifies ASR by corrupting the node's historical context. Static GNNs have no analogous vulnerability.
+- **Memory Poisoning Attack (MPA):** Sustained injection of carefully crafted "benign-looking" edges gradually shifts node memory state, causing the model to persistently misclassify subsequent real attack flows. The degradation persists for a quantifiable number of time steps after injection ceases (memory half-life).
+
+**Core thesis:** Temporal memory mechanisms, while improving clean-data performance, introduce exploitable timing dependencies that make temporal GNNs *less* robust than static GNNs under adversarial conditions. This counter-intuitive result is the central finding of this work.
 
 ### 1.2 Research Questions
 
-1. Do temporal graph neural networks provide greater adversarial robustness than static GNNs for intrusion detection, given that attackers must simultaneously deceive both spatial and temporal feature dimensions?
-2. Can a constraint-aware adversarial example generation framework produce realistic, protocol-valid evasion traffic that transfers across both static and temporal NIDS architectures?
-3. Does adversarial training with constraint-enforced examples improve robustness without significant degradation of clean detection performance?
+1. **RQ1 (Timing Attack):** Does the injection timing of adversarial edges significantly affect ASR on temporal NIDS? What is the optimal timing strategy, and how does it differ from static NIDS?
+2. **RQ2 (Memory Poisoning):** Can sustained adversarial edge injection permanently degrade temporal NIDS detection capability? How long does the degradation persist after injection stops (memory half-life)?
+3. **RQ3 (Constraint Validity):** Can a constraint-aware framework produce protocol-valid, network-realizable adversarial flows that achieve high ASR? How do reported ASR values change when CSR = 1.0 is enforced?
+4. **RQ4 (Defense):** Does adversarial training with timing-aware and memory-poisoning examples improve robustness without significant clean-performance degradation?
 
 ### 1.3 Proposed Solution
 
-A three-component framework:
+A four-component framework:
 
-1. **Unified Graph Construction Pipeline** — converts NetFlow data into both static and continuous-time dynamic graph formats, enabling fair comparison across model architectures.
+1. **Unified Graph Construction Pipeline** — converts NetFlow CSV data into both static snapshot graphs and continuous-time dynamic graphs, enabling fair cross-architecture comparison.
 2. **Dual-Architecture NIDS** — static GNN (GraphSAGE/GAT) as baseline; temporal GNN (TGAT/TGN) as primary research target. All models share a common `BaseNIDSModel` interface.
-3. **Constraint-Aware Adversarial Example Generator (CAAG)** — graph-structured attack framework that enforces protocol validity, feature consistency, and semantic preservation constraints during perturbation generation. All attacks share a common `BaseAttack` interface.
+3. **Constraint-Aware Adversarial Example Generator (CAAG)** — enforces protocol validity, feature co-dependency, and semantic preservation (CSR = 1.0 requirement). Contains four attack methods: C-PGD, TAEI, MPA, WGAN-GP.
+4. **Temporal Robustness Evaluation Suite** — extends standard ASR/F1 metrics with timing-sensitivity analysis, memory half-life measurement, and cross-model transfer experiments.
 
 ### 1.4 Overall System Flow
 
@@ -85,8 +95,9 @@ flowchart TD
     CAAG --> EVAL["Evaluation & Hardening"]
     EVAL --> R1["ASR / DR@attack"]
     EVAL --> R2["Robustness Gap"]
-    EVAL --> R3["Cross-model Transfer Rate"]
-    EVAL --> R4["Adversarial Training"]
+    EVAL --> R3["Memory Half-Life\n記憶污染持續時間"]
+    EVAL --> R4["Cross-model Transfer Rate"]
+    EVAL --> R5["Adversarial Training"]
 ```
 
 ---
@@ -107,7 +118,8 @@ src/
 │   ├── base.py             ← BaseAttack ABC（所有攻擊共用介面）
 │   ├── constraints.py      ← 約束集合定義與驗證（從 data/ 移至此處）
 │   ├── cpgd.py
-│   ├── edge_injection.py
+│   ├── edge_injection.py   ← TAEI（含 timing 最佳化）
+│   ├── memory_poisoning.py ← MPA（⭐ 新增，時序模型專屬）
 │   ├── gan_generator.py
 │   └── evaluator.py
 ├── data/
@@ -517,6 +529,68 @@ memory_reset_policy: before_each_attack
 target_split: test
 ```
 
+---
+
+**Attack 4: Memory Poisoning Attack (MPA)** ⭐ 時序模型專屬
+
+MPA 是本研究最重要的新貢獻，利用 TGN/TGAT 節點記憶體的持久性設計長期攻擊策略。
+
+**攻擊原理：**
+
+TGN 的 GRU memory updater 在每個時間步更新節點記憶體：
+
+```
+m_v(t) = GRU(msg_v(t), m_v(t-1))
+```
+
+攻擊者透過注入精心設計的「正常流量」邊（滿足所有約束），使目標節點的記憶體向「良性」方向偏移。當真實攻擊流量出現時，模型基於被污染的記憶體計算出偏向良性的預測。
+
+**攻擊流程：**
+
+```
+Phase 1 — 污染期（Poisoning Horizon = H 秒）:
+    For t = 1 to H / Δt:
+        生成 n_poison 條偽裝邊（features ∈ benign distribution, CSR = 1.0）
+        注入至目標節點的鄰域，使 m_v 偏離攻擊類別方向
+
+Phase 2 — 利用期（Exploitation Window）:
+    攻擊者發動真實攻擊流量（無修改）
+    觀察 DR@attack 降幅（污染前 vs 污染後）
+
+量化指標：
+    Memory Degradation Δ = DR@attack_clean - DR@attack_poisoned
+    Memory Half-Life T½ = 停止注入後，DR@attack 恢復至原始 90% 所需時間步數
+```
+
+**記憶狀態監控（Memory State Tracking）：**
+
+為可視化污染效果，在 `evaluator.py` 中新增記憶體狀態快照功能：
+
+```python
+# src/attack/evaluator.py
+def snapshot_memory(model: BaseNIDSModel, node_ids: list[int]) -> torch.Tensor:
+    """Return current memory vectors for target nodes (TGN/TGAT only)."""
+    ...
+```
+
+**設定欄位：**
+
+```yaml
+# configs/attack/mpa.yaml
+_target_: src.attack.memory_poisoning.MemoryPoisoningAttack
+n_poison_per_step: 20          # 每個時間步注入的偽裝邊數
+poisoning_horizon_s: 300       # 污染期持續秒數（預設 5 分鐘）
+exploitation_window_s: 120     # 利用期觀測窗口
+target_nodes: auto             # auto = 選擇 degree top-10% 的節點
+track_memory_state: true       # 是否記錄每步記憶體向量
+memory_reset_policy: never     # MPA 專用：不重置（研究累積效果）
+target_split: test
+```
+
+> ⚠️ **靜態 GNN 適用性：** MPA 對 GraphSAGE / GAT 不適用（無記憶機制），以「N/A」填入比較矩陣。這本身是一個重要的差異化發現。
+
+---
+
 #### 3.3.3 Constraint Set Definition
 
 約束定義於 `src/attack/constraints.py`。所有攻擊方法在每次梯度更新後呼叫 `ConstraintSet.project(x_adv, scaler)`。
@@ -591,6 +665,9 @@ sequenceDiagram
 | **DR@attack** | Detection Rate of the NIDS under adversarial conditions |
 | **Robustness Gap** | Clean F1 − Adversarial F1 |
 | **Transfer Rate** | ASR when adversarial examples from Model A are evaluated on Model B（見下） |
+| **Timing Sensitivity Curve** | ASR as a function of injection time offset Δt prior to attack event（TAEI 專屬） |
+| **Memory Half-Life (T½)** | Time steps for DR@attack to recover to 90% of clean baseline after MPA injection stops（MPA 專屬） |
+| **Memory Degradation Δ** | DR@attack_clean − DR@attack_poisoned（MPA 污染效果量化） |
 
 **Transfer Rate 定義細節**
 
@@ -606,9 +683,10 @@ Every attack method × every model:
 
 | | GraphSAGE | GAT | TGAT | TGN |
 |---|:---:|:---:|:---:|:---:|
-| C-PGD（white-box） | ✓ | ✓ | ✓ | ✓ |
-| Edge Injection | ✓ | ✓ | ✓ | ✓ |
-| GAN（black-box） | ✓ | ✓ | ✓ | ✓ |
+| C-PGD（white-box gradient） | ✓ | ✓ | ✓ | ✓ |
+| TAEI（Timing-Aware Edge Injection） | ✓ baseline | ✓ baseline | ⭐ 主要目標 | ⭐ 主要目標 |
+| MPA（Memory Poisoning Attack） | N/A | N/A | ⭐ 主要目標 | ⭐ 主要目標 |
+| WGAN-GP（black-box） | ✓ | ✓ | ✓ | ✓ |
 | After Adv. Training | ✓ | ✓ | ✓ | ✓ |
 
 #### 3.4.5 Comparison Script: Hydra `instantiate`
@@ -737,26 +815,31 @@ All experiments managed via Hydra config files under `configs/`.
 
 | Month | Milestone | Deliverable |
 |-------|-----------|-------------|
-| 1–2 | 基礎設施完成 | `BaseNIDSModel`、`BaseAttack`、`seed.py`、`checkpoint.py` 完成；靜態圖 pipeline 完成（含 scaler 序列化、時序切分驗證） |
-| 3 | GraphSAGE / GAT baseline | Reproduced weighted F1 ≥ 0.90 on NF-UNSW-NB15-v2；logged to W&B |
-| 4–5 | Temporal graph pipeline + TGAT / TGN | `data/processed/temporal/` populated；模型訓練中；memory reset policy 驗證 |
-| 6 | **Checkpoint：靜態對抗實驗** | C-PGD 和 Edge Injection 對 GraphSAGE / GAT 的 ASR 和 CSR 表格（val 超參數 → test 最終報告） |
-| 7–8 | Temporal adversarial experiments | 相同攻擊對 TGAT / TGN；cross-model 比較矩陣；Transfer Rate 表格 |
-| 9 | GAN generator + adversarial training | Black-box 結果；robustness-accuracy trade-off 曲線 |
-| 10 | Cross-dataset validation | NF-BoT-IoT-v2 結果 |
-| 11–12 | Paper + system demo | Draft manuscript；interactive demo |
+| 1–2 | 基礎設施完成 | `BaseNIDSModel`、`BaseAttack`、`seed.py`、`checkpoint.py`；靜態圖 pipeline；memory state tracker |
+| 3 | GraphSAGE / GAT baseline | Weighted F1 ≥ 0.90 on NF-UNSW-NB15-v2；C-PGD baseline ASR 表格 |
+| 4–5 | Temporal pipeline + TGAT / TGN | `data/processed/temporal/` populated；TGAT/TGN 訓練完成；memory reset policy 驗證 |
+| 6 | **Checkpoint：TAEI 核心實驗** | Timing Sensitivity Curve（TGAT/TGN）；靜態 vs 時序 TAEI ASR 比較；**確認 timing 效果顯著（論文核心結果）** |
+| 7 | Memory Poisoning Attack | MPA 實作完成；Memory Degradation Δ 與 Half-Life T½ 量化表格；記憶體狀態可視化 |
+| 8 | GAN + 全比較矩陣 | Black-box 結果；4 × 4 比較矩陣（含 N/A 格）；Transfer Rate 分析 |
+| 9 | 對抗訓練 + 跨資料集驗證 | Adversarial training 結果；NF-BoT-IoT-v2 遷移實驗；robustness-accuracy trade-off |
+| 10–11 | Paper writing | Draft manuscript（建議投 NDSS 2027 / USENIX Security 2027）；reviewer response 預演 |
+| 12 | Camera-ready + code release | 開源 GARF-NIDS；reproducible artifact（Docker + scripts） |
 
 ---
 
 ## 8. Non-Goals
 
-The following are explicitly out of scope:
+The following are explicitly out of scope for this work:
 
 - Real-time packet capture and online inference (demo uses pre-recorded flows)
 - Host-based intrusion detection (audit logs, system calls)
 - LLM-based analysis
 - Deployment on embedded or edge hardware
-- Certified adversarial robustness (formal verification)
+
+The following are deferred to future work:
+
+- **Certified adversarial robustness:** Formal verification (e.g., randomized smoothing for GNNs) is a natural extension. This work provides the empirical foundation; certification can follow once the attack surface is fully characterized.
+- **Adaptive defenses:** Defenses specifically designed to counter TAEI and MPA (e.g., memory regularization, anomaly detection on the memory update trajectory).
 
 ---
 
@@ -774,7 +857,12 @@ The following are explicitly out of scope:
 - Zügner, D., & Günnemann, S. "Adversarial Attacks on GNNs via Meta Learning." *ICLR 2019.* — MetaAttack
 - Jin, W., et al. "Graph Structure Learning for Robust Graph Neural Networks." *KDD 2020.* — Pro-GNN
 - Apruzzese, G., et al. "Modeling Realistic Adversarial Attacks against NIDS." *ACM DTRAP 2021.*
+- Han, D., et al. "Practical Traffic-Space Adversarial Attacks on Learning-Based NIDSs." *USENIX Security 2021.* — BAAAN
 - Yuan, X., et al. "A Simple Framework to Enhance Adversarial Robustness of DL-based IDS." *Computers & Security 2024.*
 - Okada, K., et al. "XAI-driven Adversarial Attacks on Network Intrusion Detectors." *EICC 2024.*
 - Cong, W., et al. "Do We Really Need Complicated Model Architectures For Temporal Networks?" *ICLR 2023.* — GraphMixer
+- Huang, S., et al. "Temporal Graph Benchmark for Machine Learning on Temporal Graphs." *NeurIPS 2023.* — TGB
+- Wan, C., et al. "Adversarial Attack and Defense on Graph Data: A Survey." *IEEE TKDE 2023.*
+- Croce, F., & Hein, M. "Reliable Evaluation of Adversarial Robustness with an Ensemble of Diverse Parameter-free Attacks." *ICML 2020.* — AutoAttack
+- Caville, E., et al. "Anomal-E: A Self-Supervised Network Intrusion Detection System based on Graph Neural Networks." *Knowledge-Based Systems 2022.*
 - Yu, L., et al. "Towards Better Dynamic Graph Learning: New Architecture and Unified Library." *NeurIPS 2023.* — DyGLib
