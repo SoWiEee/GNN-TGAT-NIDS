@@ -1,5 +1,5 @@
 # Project-specific: large data files and model checkpoints
-data/raw/
+data/raw/NF-UNSW-NB15-v2/*
 data/processed/
 data/adversarial/
 checkpoints/
