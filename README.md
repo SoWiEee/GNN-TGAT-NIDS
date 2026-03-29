@@ -51,19 +51,29 @@ Graph-Aware Adversarial Robustness Framework for Network Intrusion Detection
 
 ## Installation
 
-本專案使用 [uv](https://docs.astral.sh/uv/) 管理相依套件。
+本專案使用 [uv](https://docs.astral.sh/uv/) 作為套件管理器，速度飛快。
+
+1. 安裝 uv：
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh    # macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh    # Linux
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"  # Windows PowerShell
+```
 
-git clone https://github.com/SoWiEee/GNN-TGAT-IDS.git
+2. 環境建置與安裝依賴：
+
+```bash
+git clone https://github.com/SoWiEee/GNN-TGAT-NIDS.git
 cd GNN-TGAT-NIDS
 
 uv sync
 uv run pip install pyg_lib torch_scatter torch_sparse torch_cluster \
     -f https://data.pyg.org/whl/torch-2.4.0+cu124.html
+```
 
+3. 執行：
+
+```bash
 uv run python -c "import torch; import torch_geometric; \
     print('PyTorch:', torch.__version__); \
     print('PyG:', torch_geometric.__version__); \
