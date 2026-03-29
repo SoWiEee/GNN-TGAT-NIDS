@@ -1,3 +1,11 @@
+# Project-specific: large data files and model checkpoints
+data/raw/
+data/processed/
+data/adversarial/
+checkpoints/
+results/
+wandb/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
