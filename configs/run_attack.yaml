@@ -1,0 +1,11 @@
+defaults:
+  - base
+  - model: graphsage
+  - attack: cpgd
+  - data: static_default
+  - _self_
+
+# Adversarial example output path includes hyperparameters to avoid overwriting
+output_dir: >-
+  ${paths.data_adversarial}/${attack._target_}
+  /eps${attack.epsilon}_steps${attack.steps}_seed${seed}

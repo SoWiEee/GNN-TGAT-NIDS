@@ -1,0 +1,14 @@
+_target_: src.models.graphsage.GraphSAGEModel
+
+layers: 3
+hidden_dim: 256
+dropout: 0.3
+aggregation: mean
+
+loss:
+  type: weighted_cross_entropy
+  class_weights: auto   # computed from train-split label frequencies
+
+train:
+  lr: 0.001
+  batch_size: 64

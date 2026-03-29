@@ -1,0 +1,19 @@
+_target_: src.attack.gan_generator.GANAttack
+
+latent_dim: 128
+gp_weight: 10             # WGAN-GP gradient penalty coefficient
+critic_iters: 5           # number of critic updates per generator update
+max_iter: 50000
+
+# Early-stop thresholds for GAN instability detection (spec §3.3.2)
+early_stop:
+  critic_loss_range: 10.0       # max allowed range over last 500 iters
+  min_csr: 0.30                 # CSR below this for 1000 iters → stop
+  cosine_similarity: 0.95       # pairwise similarity above this → mode collapse
+  patience: 1000                # iters to check before triggering early stop
+
+memory_reset_policy: before_each_attack
+target_split: test
+
+constraints:
+  scaler_path: data/processed/static/scaler.pkl

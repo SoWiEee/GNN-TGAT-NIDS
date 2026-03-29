@@ -1,0 +1,21 @@
+dataset: NF-UNSW-NB15-v2
+graph_type: temporal
+
+raw_path:       ${paths.data_raw}/NF-UNSW-NB15-v2.csv
+processed_dir:  ${paths.data_processed}/temporal
+scaler_path:    ${paths.data_processed}/temporal/scaler.pkl
+
+# Chronological split ratios — must sum to 1.0
+# NOTE: no random shuffling; splits are determined by timestamp order.
+splits:
+  train: 0.60
+  val:   0.20
+  test:  0.20
+
+normalization:
+  method: zscore
+  clip_sigma: 3.0
+
+# Time2Vec encoding parameters
+time_encoding:
+  dim: 64

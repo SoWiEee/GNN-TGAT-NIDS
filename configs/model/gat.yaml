@@ -1,0 +1,14 @@
+_target_: src.models.gat.GATModel
+
+layers: 3
+hidden_dim: 256
+heads: 4
+dropout: 0.3
+
+loss:
+  type: weighted_cross_entropy
+  class_weights: auto   # computed from train-split label frequencies
+
+train:
+  lr: 0.001
+  batch_size: 64

@@ -1,0 +1,20 @@
+dataset: NF-UNSW-NB15-v2
+graph_type: static
+
+raw_path:       ${paths.data_raw}/NF-UNSW-NB15-v2.csv
+processed_dir:  ${paths.data_processed}/static
+scaler_path:    ${paths.data_processed}/static/scaler.pkl
+
+# Tumbling window size in seconds
+window_size_s: 60
+
+# Chronological split ratios — must sum to 1.0
+splits:
+  train: 0.60
+  val:   0.20
+  test:  0.20
+
+# Z-score normalisation: fit on train split only; clip at ±3σ
+normalization:
+  method: zscore
+  clip_sigma: 3.0

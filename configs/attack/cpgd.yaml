@@ -1,0 +1,21 @@
+_target_: src.attack.cpgd.CPGDAttack
+
+epsilon: 0.1              # maximum L∞ perturbation budget
+steps: 40                 # number of PGD iterations
+step_size: 0.01           # α — per-step update size
+norm: l2                  # l2 = normalised gradient; linf = sign(gradient)
+random_init: true         # start from Uniform(-ε, ε) rather than x itself
+
+# Memory reset policy for temporal models (TGN / TGAT).
+# Options: before_each_attack | never | per_epoch
+memory_reset_policy: before_each_attack
+
+# Which data split to run the attack on.
+# val  → use during hyperparameter search (epsilon / steps)
+# test → use for final reported ASR / Robustness Gap
+target_split: test
+
+constraints:
+  # Loaded at runtime — set by data pipeline after preprocessing.
+  # Override per experiment if using temporal data.
+  scaler_path: data/processed/static/scaler.pkl

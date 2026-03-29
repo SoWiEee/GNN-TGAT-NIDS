@@ -1,0 +1,14 @@
+defaults:
+  - _self_
+
+# Global random seed — injected into every entry-point script.
+# Changing this value produces a different but fully reproducible run.
+seed: 42
+
+# Root paths (relative to project root)
+paths:
+  data_raw:        data/raw
+  data_processed:  data/processed
+  data_adversarial: data/adversarial
+  checkpoints:     checkpoints
+  results:         results

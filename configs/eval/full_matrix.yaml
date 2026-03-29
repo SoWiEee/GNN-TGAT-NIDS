@@ -1,0 +1,27 @@
+defaults:
+  - /base
+  - override /model: graphsage   # overridden at runtime per matrix cell
+  - override /attack: cpgd       # overridden at runtime per matrix cell
+  - _self_
+
+# Output directory for comparison results
+output: ${paths.results}/main_table.csv
+
+# All (model, attack) combinations to sweep
+matrix:
+  models:
+    - graphsage
+    - gat
+    - tgat
+    - tgn
+  attacks:
+    - cpgd
+    - edge_injection
+    - gan
+
+# Metrics reported per cell
+metrics:
+  - asr          # Attack Success Rate
+  - dr_attack    # Detection Rate under attack
+  - robustness_gap  # clean_f1 - adversarial_f1
+  - transfer_rate   # cross-model ASR transfer

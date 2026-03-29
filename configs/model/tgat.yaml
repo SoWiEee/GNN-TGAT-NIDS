@@ -1,0 +1,17 @@
+_target_: src.models.tgat.TGATModel
+
+hidden_dim: 172
+heads: 2
+n_neighbors: 20          # most-recent-k temporal neighborhood sampling
+
+loss:
+  type: weighted_cross_entropy
+  class_weights: auto   # computed from train-split label frequencies
+
+# TGN/TGAT-specific: node memory reset policy during adversarial evaluation.
+# Options: before_each_attack | never | per_epoch
+memory_reset_policy: before_each_attack
+
+train:
+  lr: 0.0001
+  batch_size: 200

@@ -1,0 +1,21 @@
+_target_: src.attack.edge_injection.EdgeInjectionAttack
+
+n_inject: 50              # number of synthetic edges to inject per target node
+
+# Timing search strategy for temporal models (ignored for static models).
+# Options: none | coarse_then_fine
+timing_search: coarse_then_fine
+coarse_intervals: 10      # number of equal intervals in coarse search
+tau_seconds: 60           # convergence threshold for fine-grained binary search
+
+# Injected edge feature constraints
+degree_sigma_limit: 3.0   # injected nodes must stay within 3σ of training degree dist.
+
+# Memory reset policy for temporal models
+memory_reset_policy: before_each_attack
+
+# Data split for final attack evaluation
+target_split: test
+
+constraints:
+  scaler_path: data/processed/static/scaler.pkl

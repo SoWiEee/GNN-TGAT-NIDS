@@ -1,0 +1,18 @@
+_target_: src.models.tgn.TGNModel
+
+memory_dim: 172
+message_function: mlp
+memory_updater: gru
+embedding_module: graph_attention
+
+loss:
+  type: weighted_cross_entropy
+  class_weights: auto   # computed from train-split label frequencies
+
+# TGN/TGAT-specific: node memory reset policy during adversarial evaluation.
+# Options: before_each_attack | never | per_epoch
+memory_reset_policy: before_each_attack
+
+train:
+  lr: 0.0001
+  batch_size: 200
