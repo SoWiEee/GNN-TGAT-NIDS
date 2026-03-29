@@ -124,9 +124,9 @@ uv run python defense/adversarial_training.py model=graphsage attack=cpgd mix_ra
 
 ---
 
-## 🧱 System Architecture
+# 🧱 System Architecture
 
-### Dataflow
+## Dataflow
 
 ```mermaid
 flowchart TD
@@ -164,7 +164,7 @@ flowchart TD
 
 ---
 
-### 約束感知對抗樣本生成（CAAG）
+## 約束感知對抗樣本生成（CAAG）
 
 CAAG 是本框架的核心技術貢獻。所有攻擊方法在每次梯度更新或樣本生成後，均需通過以下約束集合的投影／驗證：
 
