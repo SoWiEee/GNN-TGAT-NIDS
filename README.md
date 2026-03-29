@@ -209,7 +209,7 @@ CAAG 是本框架的核心技術設施。所有攻擊方法在每次更新或生
 TAEI 是本研究最核心的新攻擊方法，針對時序 GNN 的時間依賴性：
 
 $$
-\text{Objective}: t^* = \text{argmin}_{t \in [t_{start}, t_{attack}]} F_1(\texttt{model}, \texttt{data_with_injection_at}=t)
+\text{Objective}: t^* = \text{argmin}_{t \in [t_{start}, t_{attack}]} F_1(\texttt{model, data with injection at}=t)
 $$
 
 搜尋策略（coarse-then-fine）：
