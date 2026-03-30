@@ -10,13 +10,13 @@
     "type-check": "vue-tsc --noEmit"
   },
   "dependencies": {
+    "@vitejs/plugin-vue": "^6.0.5",
     "axios": "^1.7.0",
     "cytoscape": "^3.29.0",
-    "pinia": "^2.2.0",
+    "pinia": "^2.3.1",
     "plotly.js-basic-dist-min": "^2.35.0",
-    "@vitejs/plugin-vue": "^6.0.5",
-    "vue": "^3.5.0",
-    "vue-router": "^4.4.0"
+    "vue": "^3.5.31",
+    "vue-router": "^4.6.4"
   },
   "devDependencies": {
     "@types/cytoscape": "^3.21.0",
