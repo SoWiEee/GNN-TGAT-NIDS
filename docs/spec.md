@@ -1,260 +1,289 @@
-# Design Specification: Timing-Aware Adversarial Attacks on Temporal GNN-based Network Intrusion Detection Systems
+# System Specification: GNN-NIDS Analyzer
 
-> Iterative specification — each section builds on the previous. Implement in the order defined in [Section 7](#7-milestones-and-deliverables).
+> Upload NetFlow traffic → GNN detection → interactive web visualization + adversarial robustness report.
 
-**Version:** 0.3.0
+**Version:** 1.0.0
 **Status:** Draft
 **Last Updated:** 2026-03
-**Target Venue:** NDSS 2027 / USENIX Security 2027（備選：IEEE TIFS、RAID 2026）
 
 ---
 
 ## Table of Contents
 
-1. [Overview](#1-overview)
-   - [1.1 Problem Statement](#11-problem-statement)
-   - [1.2 Research Questions](#12-research-questions)
-   - [1.3 Proposed Solution](#13-proposed-solution)
-   - [1.4 Overall System Flow](#14-overall-system-flow)
-2. [Module Structure](#2-module-structure)
-   - [2.1 Codebase Layout](#21-codebase-layout)
-   - [2.2 Abstract Base Classes](#22-abstract-base-classes)
-   - [2.3 Global Seed & Reproducibility](#23-global-seed--reproducibility)
-   - [2.4 Checkpointing](#24-checkpointing)
-   - [2.5 Coding Standards](#25-coding-standards)
-3. [Component Specifications](#3-component-specifications)
-   - [3.1 Graph Construction Pipeline](#31-graph-construction-pipeline)
+1. [System Overview](#1-system-overview)
+   - [1.1 Goal and User Story](#11-goal-and-user-story)
+   - [1.2 System Flow](#12-system-flow)
+   - [1.3 Out of Scope](#13-out-of-scope)
+2. [Architecture](#2-architecture)
+   - [2.1 Component Diagram](#21-component-diagram)
+   - [2.2 Backend — FastAPI](#22-backend--fastapi)
+   - [2.3 Frontend — Vue 3 + Vite](#23-frontend--vue-3--vite)
+   - [2.4 Module Structure](#24-module-structure)
+   - [2.5 Abstract Base Classes](#25-abstract-base-classes)
+   - [2.6 Checkpointing & Reproducibility](#26-checkpointing--reproducibility)
+   - [2.7 Coding Standards](#27-coding-standards)
+3. [ML Pipeline](#3-ml-pipeline)
+   - [3.1 Graph Construction](#31-graph-construction)
    - [3.2 NIDS Models](#32-nids-models)
-   - [3.3 Constraint-Aware Adversarial Example Generator (CAAG)](#33-constraint-aware-adversarial-example-generator-caag)
-   - [3.4 Evaluation Protocol](#34-evaluation-protocol)
+   - [3.3 Adversarial Module (C-PGD)](#33-adversarial-module-c-pgd)
 4. [Data Pipeline](#4-data-pipeline)
-5. [Experimental Configuration](#5-experimental-configuration)
-6. [Risks and Mitigations](#6-risks-and-mitigations)
-7. [Milestones and Deliverables](#7-milestones-and-deliverables)
-8. [Non-Goals](#8-non-goals)
-9. [References](#9-references)
+5. [Frontend Views](#5-frontend-views)
+   - [5.1 Traffic Graph](#51-traffic-graph)
+   - [5.2 Alert List](#52-alert-list)
+   - [5.3 Attack Timeline](#53-attack-timeline)
+   - [5.4 Model Reliability Panel](#54-model-reliability-panel)
+   - [5.5 Adversarial Comparison Report](#55-adversarial-comparison-report)
+6. [API Design](#6-api-design)
+7. [Report Generation](#7-report-generation)
+8. [Demo Dataset Strategy](#8-demo-dataset-strategy)
+9. [Milestones](#9-milestones)
+10. [References](#10-references)
 
 ---
 
-## 1. Overview
+## 1. System Overview
 
-### 1.1 Problem Statement
+### 1.1 Goal and User Story
 
-ML-based Network Intrusion Detection Systems (NIDS) achieve high accuracy on clean benchmark data but remain vulnerable to adversarial evasion. Prior adversarial work on NIDS suffers from two compounding limitations:
+**Goal:** A self-contained web application that lets a user upload a NetFlow CSV file, runs GNN-based intrusion detection, and presents results as an interactive graph + alert list + report — including adversarial robustness analysis.
 
-**Limitation 1: Unrealistic perturbations.** Existing methods operate purely in feature space without enforcing network protocol constraints, generating samples that are mathematically effective but physically unrealizable — violating TCP state machines or creating algebraically inconsistent derived features. This systematically overestimates reported attack success rates.
+**Primary user story:**
 
-**Limitation 2: Unexplored temporal attack surface.** The majority of prior work targets static models (DNN, RF, SVM) or, at most, static GNNs. Temporal GNNs (TGAT, TGN) have been proposed to improve NIDS by incorporating historical behavior via node memory modules — but their adversarial security has not been studied. We identify and formally characterize two novel attack vectors that are **unique to temporal GNNs**:
+> As a network security analyst (or evaluator reviewing this project), I upload a NetFlow CSV.
+> Within seconds I see the traffic as an interactive graph coloured by risk, a list of high-confidence alerts with explanation, and a timeline of attack patterns.
+> I can select any detected attack flow and see a side-by-side comparison showing how an adversarial perturbation would have evaded the detector — with protocol constraints verified.
+> I export a PDF report summarising findings and model reliability metrics.
 
-- **Timing-Aware Edge Injection (TAEI):** The optimal time to inject adversarial edges is a exploitable optimization variable. Injecting edges before a target attack event — at the right temporal offset — amplifies ASR by corrupting the node's historical context. Static GNNs have no analogous vulnerability.
-- **Memory Poisoning Attack (MPA):** Sustained injection of carefully crafted "benign-looking" edges gradually shifts node memory state, causing the model to persistently misclassify subsequent real attack flows. The degradation persists for a quantifiable number of time steps after injection ceases (memory half-life).
+**Secondary user story (evaluator / reviewer):**
 
-**Core thesis:** Temporal memory mechanisms, while improving clean-data performance, introduce exploitable timing dependencies that make temporal GNNs *less* robust than static GNNs under adversarial conditions. This counter-intuitive result is the central finding of this work.
+> I want to know how trustworthy this system is.
+> The Model Reliability Panel shows me: clean F1, detection rate under adversarial attack, and improvement after adversarial training — answering "what happens if someone tries to fool this?"
 
-### 1.2 Research Questions
-
-1. **RQ1 (Timing Attack):** Does the injection timing of adversarial edges significantly affect ASR on temporal NIDS? What is the optimal timing strategy, and how does it differ from static NIDS?
-2. **RQ2 (Memory Poisoning):** Can sustained adversarial edge injection permanently degrade temporal NIDS detection capability? How long does the degradation persist after injection stops (memory half-life)?
-3. **RQ3 (Constraint Validity):** Can a constraint-aware framework produce protocol-valid, network-realizable adversarial flows that achieve high ASR? How do reported ASR values change when CSR = 1.0 is enforced?
-4. **RQ4 (Defense):** Does adversarial training with timing-aware and memory-poisoning examples improve robustness without significant clean-performance degradation?
-
-### 1.3 Proposed Solution
-
-A four-component framework:
-
-1. **Unified Graph Construction Pipeline** — converts NetFlow CSV data into both static snapshot graphs and continuous-time dynamic graphs, enabling fair cross-architecture comparison.
-2. **Dual-Architecture NIDS** — static GNN (GraphSAGE/GAT) as baseline; temporal GNN (TGAT/TGN) as primary research target. All models share a common `BaseNIDSModel` interface.
-3. **Constraint-Aware Adversarial Example Generator (CAAG)** — enforces protocol validity, feature co-dependency, and semantic preservation (CSR = 1.0 requirement). Contains four attack methods: C-PGD, TAEI, MPA, WGAN-GP.
-4. **Temporal Robustness Evaluation Suite** — extends standard ASR/F1 metrics with timing-sensitivity analysis, memory half-life measurement, and cross-model transfer experiments.
-
-### 1.4 Overall System Flow
+### 1.2 System Flow
 
 ```mermaid
-flowchart TD
-    DS["📁 NetFlow CSV\nNF-UNSW-NB15-v2 / NF-BoT-IoT-v2"]
-
-    DS --> SB["Static Graph Builder\n時間窗口快照 (tumbling window)"]
-    DS --> TB["Temporal Graph Builder\n連續時間動態圖 (per-flow events)"]
-
-    SB --> SDS["PyG Dataset\n按需載入 .pt 檔"]
-    TB --> TDS["PyG TemporalData\ntrain / val / test .pt"]
-
-    SDS --> M1["GraphSAGE"]
-    SDS --> M2["GAT"]
-    TDS --> M3["TGAT"]
-    TDS --> M4["TGN"]
-
-    M1 & M2 & M3 & M4 --> CAAG
-
-    subgraph CAAG["CAAG — Constraint-Aware Adversarial Example Generator"]
-        A1["Constrained PGD\n正規化梯度 + 投影"]
-        A2["Edge Injection\n時機最佳化"]
-        A3["WGAN-GP\n黑箱生成器"]
+flowchart LR
+    subgraph Input
+        CSV["📄 NetFlow CSV"]
     end
 
-    CAAG --> EVAL["Evaluation & Hardening"]
-    EVAL --> R1["ASR / DR@attack"]
-    EVAL --> R2["Robustness Gap"]
-    EVAL --> R3["Memory Half-Life\n記憶污染持續時間"]
-    EVAL --> R4["Cross-model Transfer Rate"]
-    EVAL --> R5["Adversarial Training"]
+    subgraph Backend["Backend — FastAPI"]
+        SB["Static Graph Builder\n60 s windows"]
+        GNN["GNN Inference\nGraphSAGE / GAT"]
+        ADV["C-PGD Adversarial\nModule"]
+        RPT["Report Builder\nJinja2 → PDF/HTML"]
+    end
+
+    subgraph Frontend["Frontend — Vue 3 + Vite"]
+        V1["① Traffic Graph"]
+        V2["② Alert List"]
+        V3["③ Attack Timeline"]
+        V4["④ Reliability Panel"]
+        V5["⑤ Adversarial Report"]
+    end
+
+    CSV --> SB --> GNN --> V1 & V2 & V3
+    GNN --> ADV --> V5
+    V5 --> RPT
+    V4 -.->|"pre-computed\nreliability.json"| V4
 ```
+
+### 1.3 Out of Scope
+
+- Live PCAP capture / streaming inference (Phase 3 future work)
+- TGAT / TGN temporal models in the web app (Phase 3; models exist in `src/` but are not wired to the UI in v1)
+- Multi-user authentication / session management
+- Production deployment hardening (TLS, rate limiting)
 
 ---
 
-## 2. Module Structure
+## 2. Architecture
 
-### 2.1 Codebase Layout
+### 2.1 Component Diagram
 
 ```
-src/
+┌──────────────────────────────────────────────────────────────┐
+│  Browser  (Vue 3 + Vite)                                      │
+│  ┌──────────┐ ┌───────────┐ ┌────────────┐ ┌─────────────┐  │
+│  │ Traffic  │ │  Alert    │ │  Attack    │ │ Adversarial │  │
+│  │ Graph    │ │  List     │ │  Timeline  │ │ Report      │  │
+│  │Cytoscape │ │           │ │  Plotly.js │ │ + PDF export│  │
+│  └────┬─────┘ └─────┬─────┘ └─────┬──────┘ └──────┬──────┘  │
+└───────┼─────────────┼─────────────┼────────────────┼─────────┘
+        │  axios      │             │                │
+┌───────▼─────────────▼─────────────▼────────────────▼─────────┐
+│  FastAPI (uvicorn)                                             │
+│  POST /analyze   GET /alerts   GET /timeline   POST /adv      │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │  app/services/                                           │ │
+│  │  ├── inference.py   ← loads checkpoint, runs GNN        │ │
+│  │  ├── graph_builder.py ← PyG → Cytoscape.js JSON         │ │
+│  │  └── report_builder.py ← Jinja2 → WeasyPrint PDF        │ │
+│  └──────────────────────────────────────────────────────────┘ │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │  src/  (ML core)                                         │ │
+│  │  data/static_builder.py   models/graphsage.py           │ │
+│  │  data/static_dataset.py   models/gat.py                 │ │
+│  │  attack/constraints.py    attack/cpgd.py                │ │
+│  └──────────────────────────────────────────────────────────┘ │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### 2.2 Backend — FastAPI
+
+**Entry point:** `app/main.py`
+
+```python
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from app.routers import analysis, adversarial, report
+from app.services.inference import load_model
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    load_model()          # load checkpoint once at startup
+    yield
+
+app = FastAPI(lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"])
+app.include_router(analysis.router)
+app.include_router(adversarial.router)
+app.include_router(report.router)
+```
+
+**Session model:** Each uploaded CSV gets a `session_id` (UUID). Processed graphs and inference results are stored under `data/sessions/{session_id}/` and cleaned up after 1 hour.
+
+### 2.3 Frontend — Vue 3 + Vite
+
+**Key dependencies:**
+
+| Package | Purpose |
+|---------|---------|
+| `vue` 3.x | Composition API |
+| `vite` | Build tool + dev server |
+| `pinia` | State management (session store, alert store) |
+| `vue-router` | Tab-based navigation between 5 views |
+| `cytoscape` | Traffic graph rendering |
+| `plotly.js` | Attack timeline chart |
+| `axios` | API client |
+
+**Store design (Pinia):**
+
+```typescript
+// stores/session.ts
+interface SessionStore {
+  sessionId: string | null
+  status: 'idle' | 'uploading' | 'analyzing' | 'ready' | 'error'
+  graphData: CytoscapeElements | null
+  alerts: Alert[]
+  timelineData: PlotlyData | null
+  reliability: ReliabilityMetrics | null
+}
+```
+
+### 2.4 Module Structure
+
+```
+src/                           # ML core
 ├── models/
-│   ├── base.py             ← BaseNIDSModel ABC（所有模型共用介面）
-│   ├── graphsage.py
-│   ├── gat.py
-│   ├── tgat.py
-│   └── tgn.py
+│   ├── base.py                ← BaseNIDSModel ABC
+│   ├── graphsage.py           ← ✅ implemented
+│   └── gat.py                 ← ✅ implemented
 ├── attack/
-│   ├── base.py             ← BaseAttack ABC（所有攻擊共用介面）
-│   ├── constraints.py      ← 約束集合定義與驗證（從 data/ 移至此處）
-│   ├── cpgd.py
-│   ├── edge_injection.py   ← TAEI（含 timing 最佳化）
-│   ├── memory_poisoning.py ← MPA（⭐ 新增，時序模型專屬）
-│   ├── gan_generator.py
-│   └── evaluator.py
+│   ├── base.py                ← BaseAttack ABC
+│   ├── constraints.py         ← ✅ implemented (TCP, bounds, co-dep)
+│   └── cpgd.py                ← Phase 2
 ├── data/
-│   ├── loader.py
-│   ├── static_builder.py
-│   ├── static_dataset.py   ← PyG Dataset（按需載入）
-│   └── temporal_builder.py
-├── defense/
-│   └── adversarial_training.py
+│   ├── loader.py              ← ✅ implemented
+│   ├── static_builder.py      ← ✅ implemented
+│   └── static_dataset.py      ← ✅ implemented
 ├── eval/
-│   ├── metrics.py
-│   └── comparison.py       ← 透過 Hydra instantiate 動態載入模型與攻擊
+│   └── metrics.py             ← ✅ implemented
 └── utils/
-    ├── config.py
-    ├── seed.py              ← 全域亂數種子
-    ├── checkpoint.py        ← 模型儲存與恢復
-    └── logger.py
+    ├── seed.py                ← ✅ implemented
+    └── checkpoint.py          ← ✅ implemented
+
+app/                           # FastAPI application
+├── main.py
+├── routers/
+│   ├── analysis.py
+│   ├── adversarial.py
+│   └── report.py
+├── services/
+│   ├── inference.py
+│   ├── graph_builder.py
+│   └── report_builder.py
+└── templates/
+    └── report.html.j2
+
+frontend/                      # Vue 3 + Vite
+├── src/
+│   ├── views/
+│   │   ├── TrafficGraph.vue
+│   │   ├── AlertList.vue
+│   │   ├── AttackTimeline.vue
+│   │   ├── ReliabilityPanel.vue
+│   │   └── AdversarialReport.vue
+│   ├── components/
+│   ├── stores/
+│   └── api/
+├── vite.config.ts
+└── package.json
+
+scripts/
+└── compute_reliability_metrics.py  ← offline, run once after training
 ```
 
 > **重要：** `constraints.py` 屬於攻擊邏輯，放在 `src/attack/` 而非 `src/data/`，以避免資料模組對攻擊模組的反向依賴。
 
-### 2.2 Abstract Base Classes
+### 2.5 Abstract Base Classes
 
-所有模型與攻擊方法均繼承對應的 ABC，使 `eval/comparison.py` 得以透過統一介面呼叫，新增模型或攻擊方法時不需修改評估邏輯。
-
-**`src/models/base.py`**
+**`src/models/base.py`** — all GNN models implement this interface so `app/services/inference.py` can call any model uniformly:
 
 ```python
-from abc import ABC, abstractmethod
-import torch
-from torch_geometric.data import Data, TemporalData
-
 class BaseNIDSModel(ABC):
-    """All NIDS GNN models must implement this interface."""
-
     @abstractmethod
-    def forward(self, data: Data | TemporalData) -> torch.Tensor:
-        """Return per-edge logits."""
-        ...
-
+    def forward(self, data: Data) -> torch.Tensor:
+        """Return per-edge logits (num_edges, num_classes)."""
     @abstractmethod
-    def predict_edges(self, data: Data | TemporalData) -> torch.Tensor:
-        """Return per-edge predicted class (argmax of forward)."""
-        ...
+    def predict_edges(self, data: Data) -> torch.Tensor:
+        """Return per-edge predicted class indices."""
+    def attention_weights(self, data: Data) -> torch.Tensor | None:
+        """Return edge attention weights for alert explanation (GAT only)."""
+        return None
 ```
 
-**`src/attack/base.py`**
+**`src/attack/base.py`** — adversarial module interface:
 
 ```python
-from abc import ABC, abstractmethod
-from src.models.base import BaseNIDSModel
-
 class BaseAttack(ABC):
-    """All CAAG attack methods must implement this interface."""
-
     @abstractmethod
-    def generate(self, model: BaseNIDSModel, data, **kwargs):
-        """Generate adversarial examples. Returns perturbed data."""
-        ...
-
+    def generate(self, model: BaseNIDSModel, data, **kwargs): ...
     @abstractmethod
-    def constraint_check(self, x_adv) -> bool:
-        """Return True only if all constraints in the constraint set are satisfied."""
-        ...
+    def constraint_check(self, x_adv, attack_label: int | None = None) -> bool: ...
 ```
 
-`eval/comparison.py` 依賴這兩個介面，配合 Hydra `instantiate` 動態載入（見 [Section 3.4.3](#343-comparison-script)）。
+### 2.6 Checkpointing & Reproducibility
 
-### 2.3 Global Seed & Reproducibility
+- `src/utils/seed.py` — `set_global_seed(seed)` fixes Python / NumPy / PyTorch / CUDA.
+- `src/utils/checkpoint.py` — `save_checkpoint` / `load_checkpoint` with epoch tracking.
+- `app/services/inference.py` loads the checkpoint **once** at FastAPI startup (lifespan event) and holds the model in memory for the duration of the server process.
+- All trained checkpoints are saved to `checkpoints/` (git-ignored); a demo checkpoint is committed separately.
 
-所有入口腳本（`train.py`、`attack.py`、`eval/comparison.py`）在最開始呼叫 `set_global_seed`，seed 值透過 Hydra 設定注入。
+### 2.7 Coding Standards
 
-**`src/utils/seed.py`**
-
-```python
-import random
-import numpy as np
-import torch
-
-def set_global_seed(seed: int = 42) -> None:
-    """Fix all random sources for full reproducibility."""
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-```
-
-**`configs/base.yaml`（新增 seed 欄位）**
-
-```yaml
-seed: 42
-```
-
-### 2.4 Checkpointing
-
-TGN 和 TGAT 在完整資料集上訓練可能需要數小時。所有模型訓練迴圈必須使用 `save_checkpoint` 定期儲存，並支援從中斷點恢復。
-
-**`src/utils/checkpoint.py`**
-
-```python
-import torch
-from pathlib import Path
-
-def save_checkpoint(model, optimizer, epoch: int, path: str | Path) -> None:
-    torch.save({
-        "epoch": epoch,
-        "model_state": model.state_dict(),
-        "optimizer_state": optimizer.state_dict(),
-    }, path)
-
-def load_checkpoint(model, optimizer, path: str | Path) -> int:
-    """Load checkpoint and return the epoch to resume from."""
-    ckpt = torch.load(path, weights_only=True)
-    model.load_state_dict(ckpt["model_state"])
-    optimizer.load_state_dict(ckpt["optimizer_state"])
-    return ckpt["epoch"]
-```
-
-Checkpoint 儲存策略：每 `cfg.train.save_every` 個 epoch 儲存一次，另外在驗證集 F1 最高時儲存 `best.ckpt`。
-
-### 2.5 Coding Standards
-
-| 項目 | 規範 |
-|------|------|
-| 型別提示 | Python 3.12 原生語法（`list[int]`、`dict[str, Any]`），不使用 `from typing import List` |
-| Docstring 格式 | Google style（Args / Returns / Raises） |
-| Linter | `ruff`，設定於 `pyproject.toml`，line-length = 100 |
-| 測試 | `pytest`，放置於 `tests/`，覆蓋 `constraints.py`、`metrics.py` 的所有公開函式 |
+| Item | Standard |
+|------|----------|
+| Type hints | Python 3.12 native (`list[int]`, `dict[str, Any]`) |
+| Docstrings | Google style (Args / Returns / Raises) |
+| Linter | `ruff`, line-length = 100 |
+| Backend tests | `pytest tests/` covering `constraints.py`, `metrics.py`, API routes |
+| Frontend | TypeScript strict mode; Composition API only; no Options API |
 
 ---
 
-## 3. Component Specifications
+## 3. ML Pipeline
 
 ### 3.1 Graph Construction Pipeline
 
@@ -309,32 +338,7 @@ with open(scaler_path, "wb") as f:
     pickle.dump(scaler, f)
 ```
 
-#### 3.1.3 Continuous-Time Dynamic Graph Builder
-
-- **Event representation:** Each flow as a timestamped directed edge event
-- **Temporal encoding:** Time2Vec encoding for relative time differences
-- **Node memory:** Zero-initialized; updated via GRU after each event (TGN-style)
-- **Output format:** PyTorch Geometric `TemporalData` objects
-- **Chronological split:** Train/val/test split must be strictly chronological (no shuffling)
-
-**Scaler 序列化（同靜態圖）**
-
-```
-data/processed/temporal/scaler.pkl
-```
-
-**時序切分驗證**
-
-`temporal_builder.py` 完成後強制執行 assertion，防止時序洩漏：
-
-```python
-assert train_data.t.max() < val_data.t.min(), \
-    f"Temporal leakage: train max={train_data.t.max()}, val min={val_data.t.min()}"
-assert val_data.t.max() < test_data.t.min(), \
-    f"Temporal leakage: val max={val_data.t.max()}, test min={test_data.t.min()}"
-```
-
-#### 3.1.4 Feature Normalization
+#### 3.1.3 Feature Normalization
 
 - Z-score normalization fitted **on training split only**
 - Clipping at ±3σ to reduce outlier sensitivity
@@ -399,434 +403,74 @@ assert val_data.t.max() < test_data.t.min(), \
 | Loss | Weighted cross-entropy（class weights from train split） |
 | `memory_reset_policy` | `before_each_attack`（見下） |
 
-**Model E: GraphMixer（現代時序基準）**
+#### 3.2.3 Temporal Models (Phase 3)
 
-| Parameter | Default Value |
-|-----------|---------------|
-| Architecture | MLP-Mixer（無 GRU 節點記憶） |
-| Time encoding | Fixed sinusoidal + learnable mixing |
-| Task | Edge classification |
-| Loss | Weighted cross-entropy（class weights from train split） |
-| MPA 適用性 | N/A（無持久記憶）；作為「無記憶時序模型」對照組 |
-| 實作來源 | DyGLib（Yu et al., NeurIPS 2023）標準實作 |
+TGAT and TGN are implemented in `src/models/` but are **not connected to the web app in v1**. They are trained and evaluated offline. When wired into the app in Phase 3, the `BaseNIDSModel` interface ensures the rest of the stack requires no changes.
 
-> **為什麼需要 GraphMixer：** GraphMixer 在 Temporal Graph Benchmark (TGB) 上的性能與 TGAT/TGN 相當，但不使用 GRU 記憶。若 MPA 對 GraphMixer 無效但對 TGAT/TGN 有效，可以直接驗證「記憶機制是 MPA 的必要條件」這一核心假設，大幅強化論文論證。
-
-> **實作優先序：** GraphMixer 的加入是 Phase 5（Paper Writing 前）的強化項目，不阻塞 Phase 3-4 的核心 TAEI/MPA 實驗。若時程緊迫，可在投稿後的 revision 中補充。
-
-#### 3.2.3 TGN / TGAT Memory Reset Policy
-
-TGN 的節點記憶體在訓練後會保留狀態。攻擊評估時若不定義重置時機，不同攻擊的起始狀態不同，ASR 不具可比性。
-
-| Policy | 說明 | 使用時機 |
-|--------|------|----------|
-| `before_each_attack` | 每次執行一個攻擊方法前，將所有節點記憶體重置為零 | **預設**；保證每個攻擊從相同起始狀態開始 |
-| `never` | 保留跨攻擊的累積記憶體 | 研究記憶體污染（memory poisoning）的場景 |
-| `per_epoch` | 每個訓練 epoch 開始時重置 | 對抗訓練迴圈 |
-
-在 `configs/attack/` 中以 `memory_reset_policy` 欄位指定：
-
-```yaml
-# configs/attack/cpgd.yaml
-memory_reset_policy: before_each_attack
-target_split: test
-```
-
-> **Checkpoint:** 靜態 GNN baseline 必須在 NF-UNSW-NB15-v2 上重現 weighted F1 ≥ 0.90，才進入時序模型開發。
+> **Quality gate:** GraphSAGE / GAT must reach weighted F1 ≥ 0.90 on NF-UNSW-NB15-v2 test split before Phase 2 (adversarial module) begins.
 
 ---
 
-### 3.3 Constraint-Aware Adversarial Example Generator (CAAG)
+### 3.3 Adversarial Module (C-PGD)
 
-CAAG 是本框架的核心技術貢獻，位於 `src/attack/`。所有攻擊方法繼承 `BaseAttack`，並在生成後呼叫 `constraint_check()`。
+The adversarial module's sole purpose in v1 is to power **View ⑤ — Adversarial Comparison Report**. It takes a detected attack flow, generates a protocol-valid adversarial version that evades detection, and returns both versions for side-by-side display.
 
-#### 3.3.1 Threat Model
-
-本研究採用 NDSS / USENIX Security 頂會標準的五維威脅模型，明確定義每個攻擊方法在每個維度的假設。
-
-| 維度 | C-PGD（白箱） | TAEI 白箱 | TAEI 黑箱 | MPA | WGAN-GP |
-|------|-------------|----------|----------|-----|---------|
-| **Attacker goal** | 使 NIDS 將攻擊流量誤判為良性（evasion） | 同左 | 同左 | 使目標攻擊類別的 DR 持續降低 | 同 C-PGD |
-| **Attacker knowledge** | 完整模型權重 + 架構 | 完整模型權重；知道攻擊事件的大致發生時間（±5min） | 僅能查詢模型輸出；需訓練代理模型 | 知道目標節點 ID；可查詢模型輸出（推論期） | 僅能查詢分類結果（黑箱） |
-| **Attacker capability** | 可修改現有流量的特徵向量 | 可在目標攻擊前注入少量合法-看起來的邊；不控制路由 | 同左 | 可持續注入偽裝良性邊（受 degree anomaly 限制） | 可合成並發送任意符合約束的流量 |
-| **Constraint on attacker** | CSR = 1.0；$\|\delta\|_2 \leq \varepsilon$ | 注入邊必須通過 CAAG 五類約束；節點度數 ≤ 3σ | 同左 | 同左；每步注入數 $\leq n_{\text{poison}}$ | CSR = 1.0 |
-| **Defender model** | NIDS 以固定權重做推論；無線上更新 | 同左 | 同左 | 同左（關鍵假設：部署後不重置記憶） | 同左 |
-
-> **設計決策：TAEI 黑箱為首要評估目標。** 白箱 TAEI 作為上界（oracle ASR），黑箱 TAEI 作為實際威脅場景。若黑箱 TAEI ASR 顯著低於白箱，代表 NIDS 的隱藏性提供一定保護；若差距不大，則說明模型對代理轉移高度脆弱。
-
-> **MPA 能力假設的合理性：** 攻擊者只需要能夠在目標 IP 節點的 observable traffic 中混入偽裝流量——這在 insider threat、compromised IoT device、或 BGP hijacking 等場景下均可實現，無需直接存取 NIDS 主機。
-
-#### 3.3.2 Attack Methods
-
----
-
-**Attack 1: Constrained PGD (C-PGD)**
-
-White-box gradient-based attack. 使用正規化梯度（normalized gradient）更新，而非 FGSM 的 `sign(∇L)`，以保留連續特徵空間的梯度大小資訊，達到精確的 L2 最佳化。
+#### 3.3.1 Algorithm
 
 ```
-Initialize: x_adv ← x + Uniform(-ε, ε)     # 隨機起始點
+Input:  x     — original normalised flow feature vector (attack, detected)
+        model — loaded GNN (GraphSAGE or GAT)
+        ε     — perturbation budget (default 0.1)
+        T     — PGD steps (default 40)
+        α     — step size (default 0.01)
+
+Initialize: x_adv ← x + Uniform(-ε, ε)
+
 For t = 1 to T:
-    g ← ∇_x L(f(G, x_adv), y_target)
-    x_adv ← x_adv + α · g / (‖g‖₂ + δ)     # normalized gradient（δ = 1e-8）
-    x_adv ← Project(x_adv, C)               # 約束投影（見 Section 3.3.3）
-    x_adv ← clip(x_adv, x - ε, x + ε)      # L∞ ball（若有指定 epsilon）
+    g     ← ∇_x  CrossEntropy(model(x_adv), target=benign)
+    x_adv ← x_adv + α · g / (‖g‖₂ + 1e-8)     # normalised gradient step
+    x_raw ← scaler.inverse_transform(x_adv)      # back to raw scale
+    x_raw ← ConstraintSet.project(x_raw)         # enforce protocol constraints
+    x_adv ← scaler.transform(x_raw)             # re-normalise
+    x_adv ← clip(x_adv, x − ε, x + ε)
+
+Return: x_adv  if ConstraintSet.check(x_adv) else None   # CSR = 1.0 gate
 ```
 
-> ⚠️ 約束投影 `Project()` 需先將 `x_adv` 做 **inverse transform**（還原為原始尺度），執行代數重算後，再重新 **transform**（正規化）。因此必須在執行攻擊前載入 `data/processed/*/scaler.pkl`。
+#### 3.3.2 Constraint Set (existing `src/attack/constraints.py`)
 
-**設定欄位：**
+All five constraint types are enforced after every PGD step:
 
-```yaml
-# configs/attack/cpgd.yaml
-_target_: src.attack.cpgd.CPGDAttack
-epsilon: 0.1
-steps: 40
-step_size: 0.01
-norm: l2              # l2 (normalized gradient) 或 linf (sign gradient)
-memory_reset_policy: before_each_attack
-target_split: test    # val: 調整超參數; test: 最終報告
+| Constraint | Implementation |
+|-----------|----------------|
+| TCP flag validity | Rule-based lookup (`is_valid_tcp_flags`) |
+| Feature co-dependency | Algebraic recompute (`SRC_TO_DST_SECOND_BYTES` etc.) |
+| Feature bounds | Per-feature ±3σ clip from training data |
+| Semantic preservation | Per-attack-class minimum/maximum invariants |
+| Degree anomaly limit | Not applicable to C-PGD (edge injection only) |
+
+#### 3.3.3 Output Format (returned to frontend)
+
+```json
+{
+  "flow_id": "edge_47",
+  "original": {
+    "prediction": "DDoS",
+    "confidence": 0.942,
+    "features": { "IN_PKTS": 60.0, "IN_BYTES": 3000, "FLOW_DURATION_MILLISECONDS": 150, "..." : "..." }
+  },
+  "adversarial": {
+    "prediction": "Benign",
+    "confidence": 0.612,
+    "features": { "IN_PKTS": 47.3, "IN_BYTES": 2891, "FLOW_DURATION_MILLISECONDS": 150, "..." : "..." },
+    "csr": 1.0,
+    "changed_features": [
+      { "name": "IN_PKTS",  "original": 60.0, "adversarial": 47.3, "delta_pct": -21.2, "constraint_ok": true },
+      { "name": "IN_BYTES", "original": 3000,  "adversarial": 2891,  "delta_pct":  -3.6, "constraint_ok": true }
+    ]
+  }
+}
 ```
-
----
-
-**Attack 2: Edge Injection**
-
-Injects synthetic benign-looking edges to corrupt GNN neighborhood aggregation. For temporal models, **injection timing** is an optimization variable.
-
-**Injection Constraints:**
-- Injected edges must originate from existing legitimate IP ranges
-- Flow features must be statistically normal (within 3σ of benign distribution)
-- Node degree after injection must not exceed 3σ of training distribution
-
-**Timing Optimization for Temporal Models:**
-
-```
-objective: t* = argmin_{t ∈ [t_start, t_attack]} F1(model, data_with_injection_at=t)
-
-Search strategy:
-  Step 1 (Coarse): divide [t_start, t_attack] into K equal intervals
-                   evaluate ASR at each interval midpoint → pick top-3
-  Step 2 (Fine):   binary search within each top-3 interval
-                   convergence when interval width < τ (default τ = 60s)
-```
-
-**理論分析 — Vulnerable Window 的存在性：**
-
-為確立 TAEI 的新穎性並為實驗結果提供可解釋的先驗，提出以下非正式理論分析。
-
-令 $m_v(t)$ 為目標節點 $v$ 在時刻 $t$ 的記憶向量（TGN 的 GRU memory），滿足：
-
-$$m_v(t_k) = \text{GRU}\bigl(\text{msg}(e_{v}(t_k)),\; m_v(t_{k-1})\bigr)$$
-
-**命題（Vulnerable Window 的存在性）：** 若 GRU 更新函數對記憶向量的 Jacobian 的譜半徑 $\rho = \sup_m \|\partial \text{GRU}/\partial m\|_2 < 1$（收縮映射），則在 $t_{\text{inject}}$ 注入的邊對 $t_{\text{attack}}$ 時刻分類結果的影響量滿足：
-
-$$\text{Influence}(t_{\text{inject}}) \leq C \cdot \rho^{N(t_{\text{inject}}, t_{\text{attack}})}$$
-
-其中 $N(t_{\text{inject}}, t_{\text{attack}})$ 為 $[t_{\text{inject}}, t_{\text{attack}}]$ 內有機流量事件數。
-
-**推論（Optimal Window Estimate）：**
-
-$$\Delta t^* \approx \frac{1}{r_{\text{flow}} \cdot |\ln \rho|}$$
-
-其中 $r_{\text{flow}}$ 為目標節點的平均流量速率（flows/sec）。
-
-- 當 $\Delta t \ll \Delta t^*$：注入時間過晚，記憶體無法累積足夠偏移 → 低 ASR
-- 當 $\Delta t \gg \Delta t^*$：有機流量將注入效果沖刷 → 低 ASR
-- $\Delta t = \Delta t^*$ 附近：**vulnerable window**，ASR 最大化
-
-**可驗證預測（用於 Timing Sensitivity Curve 實驗）：**
-1. Vulnerable window 寬度與 $r_{\text{flow}}$ 成反比（reconnaissance 類攻擊節點流量低，window 更寬）
-2. TGN（GRU memory，$\rho$ 接近 1）的 vulnerable window 比 TGAT（attention-based，隱式 $\rho$ 較小）更寬
-3. 靜態 GNN（GraphSAGE/GAT）無 vulnerable window（ASR vs $\Delta t$ 的曲線近乎水平）
-
-**Black-Box TAEI（代理模型轉移）：**
-
-當攻擊者僅能查詢模型輸出時，採用代理模型（surrogate）策略：
-
-```
-1. 訓練代理 TGAT（相同架構，不同隨機種子）於公開 NetFlow 分佈
-2. 在代理模型上執行白箱 TAEI，取得最優注入時間 t* 和注入邊特徵
-3. 將 (t*, injected edges) 原樣轉移到目標模型
-4. 報告 Transfer ASR = 黑箱 ASR / 白箱 ASR（轉移率）
-```
-
-評估指標：Transfer ASR 與 Δ_knowledge（白箱 ASR - 黑箱 ASR），量化白箱假設的 ASR 高估量。
-
-**設定欄位：**
-
-```yaml
-# configs/attack/edge_injection.yaml
-_target_: src.attack.edge_injection.EdgeInjectionAttack
-n_inject: 50
-timing_search: coarse_then_fine    # only for temporal models; "none" for static
-coarse_intervals: 10
-tau_seconds: 60
-knowledge: whitebox                # whitebox | blackbox（blackbox 啟用代理模型）
-surrogate_arch: tgat               # blackbox 時使用的代理模型架構
-memory_reset_policy: before_each_attack
-target_split: test
-```
-
----
-
-**Attack 3: GAN-based Generator (Black-box)**
-
-Conditional WGAN-GP trained to generate feature vectors that (a) fool the NIDS classifier and (b) satisfy the constraint set.
-
-**Training Stability Criteria:**
-
-GAN 訓練期間，若以下任一條件觸發，視為不穩定並提前停止，退回純 C-PGD 評估：
-
-| Indicator | 不穩定門檻 |
-|-----------|-----------|
-| Critic loss 振盪 | 連續 500 iter 內 loss 範圍 > 10 |
-| Constraint Satisfaction Rate | 生成樣本 CSR < 0.3（持續 1000 iter） |
-| Mode collapse | 生成樣本特徵 pairwise cosine similarity > 0.95 |
-
-```yaml
-# configs/attack/gan.yaml
-_target_: src.attack.gan_generator.GANAttack
-latent_dim: 128
-gp_weight: 10
-critic_iters: 5
-max_iter: 50000
-early_stop_patience: 1000
-memory_reset_policy: before_each_attack
-target_split: test
-```
-
----
-
-**Attack 4: Memory Poisoning Attack (MPA)** ⭐ 時序模型專屬
-
-MPA 是本研究最重要的新貢獻，利用 TGN/TGAT 節點記憶體的持久性設計長期攻擊策略。
-
-**攻擊原理：**
-
-TGN 的 GRU memory updater 在每個時間步更新節點記憶體：
-
-```
-m_v(t) = GRU(msg_v(t), m_v(t-1))
-```
-
-攻擊者透過注入精心設計的「正常流量」邊（滿足所有約束），使目標節點的記憶體向「良性」方向偏移。當真實攻擊流量出現時，模型基於被污染的記憶體計算出偏向良性的預測。
-
-**攻擊流程：**
-
-```
-Phase 1 — 污染期（Poisoning Horizon = H 秒）:
-    For t = 1 to H / Δt:
-        生成 n_poison 條偽裝邊（features ∈ benign distribution, CSR = 1.0）
-        注入至目標節點的鄰域，使 m_v 偏離攻擊類別方向
-
-Phase 2 — 利用期（Exploitation Window）:
-    攻擊者發動真實攻擊流量（無修改）
-    觀察 DR@attack 降幅（污染前 vs 污染後）
-
-量化指標：
-    Memory Degradation Δ = DR@attack_clean - DR@attack_poisoned
-    Memory Half-Life T½ = 停止注入後，DR@attack 恢復至原始 90% 所需時間步數
-```
-
-**記憶狀態監控（Memory State Tracking）：**
-
-為可視化污染效果，在 `evaluator.py` 中新增記憶體狀態快照功能：
-
-```python
-# src/attack/evaluator.py
-def snapshot_memory(model: BaseNIDSModel, node_ids: list[int]) -> torch.Tensor:
-    """Return current memory vectors for target nodes (TGN/TGAT only)."""
-    ...
-```
-
-**設定欄位：**
-
-```yaml
-# configs/attack/mpa.yaml
-_target_: src.attack.memory_poisoning.MemoryPoisoningAttack
-n_poison_per_step: 20          # 每個時間步注入的偽裝邊數
-poisoning_horizon_s: 300       # 污染期持續秒數（預設 5 分鐘）
-exploitation_window_s: 120     # 利用期觀測窗口
-target_nodes: betweenness_top_k  # betweenness centrality 最高的 top-K 節點（影響最廣泛）
-track_memory_state: true       # 是否記錄每步記憶體向量
-memory_reset_policy: never     # MPA 專用：不重置（研究累積效果）
-target_split: test
-```
-
-> ⚠️ **靜態 GNN 適用性：** MPA 對 GraphSAGE / GAT 不適用（無記憶機制），以「N/A」填入比較矩陣。這本身是一個重要的差異化發現。
-
----
-
-#### 3.3.3 Constraint Set Definition
-
-約束定義於 `src/attack/constraints.py`。所有攻擊方法在每次梯度更新後呼叫 `ConstraintSet.project(x_adv, scaler)`。
-
-| Constraint Type | Description | Implementation |
-|----------------|-------------|----------------|
-| **Protocol validity** | TCP flag combinations must be valid state sequences | Rule-based lookup table |
-| **Feature co-dependency** | `flow_byts_s = tot_fwd_byts / flow_duration`；衍生特徵須在 inverse transform 後重新計算 | Algebraic recomputation → re-transform |
-| **Feature bounds** | Each feature clipped to empirically observed min/max from training data | Per-feature bound table |
-| **Semantic preservation** | Attack traffic must retain attack-class characteristics (e.g., DDoS must maintain high packet rate) | Per-attack-type invariant set |
-| **Degree anomaly limit** | Node degree after edge injection must remain within 3σ of training distribution | Statistical check |
-
-#### 3.3.4 Constraint Satisfaction Rate (CSR)
-
-```
-CSR = |{x_adv : all constraints satisfied}| / |{x_adv generated}|
-```
-
-Only adversarial examples with **CSR = 1.0** are used in robustness evaluation. This is the key differentiator from prior work that reports attack success without constraint validation.
-
-#### 3.3.5 Prior Work Comparison Protocol（BAAAN Baseline）
-
-> **重要：** CAAG 的 P2 貢獻（「現有工作高估 ASR」）必須以量化對比支撐，否則審稿人無法評估貢獻幅度。
-
-**強制執行的比較實驗：**
-
-在 `eval/baseline_comparison.py` 中重現 BAAAN（Han et al., USENIX'21）的攻擊流程，並計算其在本框架約束集合下的 CSR：
-
-```python
-# eval/baseline_comparison.py
-def evaluate_baaan_csr(baaan_adv_examples: np.ndarray, cs: ConstraintSet) -> dict:
-    """
-    Compute CSR of BAAAN-generated adversarial examples under CAAG constraints.
-    Reports: overall CSR, per-constraint failure rates.
-    """
-    results = {
-        "csr_overall": cs.csr(baaan_adv_examples),
-        "tcp_validity_rate":    ...,  # 多少樣本通過 TCP flag 約束
-        "co_dependency_rate":   ...,  # 多少樣本通過代數一致性約束
-        "bounds_rate":          ...,  # 多少樣本通過特徵邊界約束
-        "semantic_rate":        ...,  # 多少樣本通過語義保留約束
-    }
-    return results
-```
-
-**預期呈現形式（論文 Table 2）：**
-
-| Method | CSR↑ | ASR（unconstrained）↑ | ASR（CSR=1.0）↑ | ASR Gap |
-|--------|------|----------------------|----------------|---------|
-| BAAAN [Han et al.] | TBD | TBD | TBD（估計顯著下降） | TBD |
-| C-PGD（本研究） | **1.00** | — | TBD | 0 |
-| TAEI 黑箱（本研究） | **1.00** | — | TBD | 0 |
-
-> **若 BAAAN 的 CSR 已 ≥ 0.90：** 貢獻定位需調整——強調本研究在語義保留約束和邊注入度數限制上的**額外貢獻**，而非全面替代。
->
-> **若 BAAAN 的 CSR ≤ 0.60：** 此表格即是論文中最有力的一個 evidence，直接支持「現有工作系統性高估 ASR」的核心主張。
-
-**Constraint Check Sequence Diagram**
-
-```mermaid
-sequenceDiagram
-    participant ATK as Attack (CPGDAttack)
-    participant CS  as ConstraintSet
-    participant SC  as Scaler
-
-    loop For each PGD step t
-        ATK->>ATK: x_adv ← x_adv + α · g / (‖g‖₂ + δ)
-        ATK->>SC: inverse_transform(x_adv)
-        SC-->>ATK: x_raw
-        ATK->>CS: project(x_raw)
-        CS->>CS: check protocol validity
-        CS->>CS: recompute derived features
-        CS->>CS: clip feature bounds
-        CS-->>ATK: x_projected
-        ATK->>SC: transform(x_projected)
-        SC-->>ATK: x_adv (updated)
-    end
-    ATK->>CS: constraint_check(x_adv_final)
-    CS-->>ATK: CSR score
-```
-
----
-
-### 3.4 Evaluation Protocol
-
-#### 3.4.1 Split Usage Policy
-
-對抗樣本的集合歸屬需明確定義，以避免測試集洩漏。
-
-| 用途 | 使用集合 | 理由 |
-|------|---------|------|
-| 攻擊超參數調整（ε、steps） | **Validation set** | 避免在測試集上過擬合攻擊參數 |
-| 最終 ASR / Robustness Gap 報告 | **Test set** | 與乾淨 F1 使用相同集合 |
-| 對抗訓練的對抗樣本 | **Training set** | 不得使用測試集資料訓練模型 |
-
-在每個攻擊設定的 `target_split` 欄位中明確指定。
-
-#### 3.4.2 Clean Performance Metrics
-
-- Weighted F1, Precision, Recall (per-class and macro)
-- ROC-AUC
-- Inference latency (ms/batch) and peak GPU memory usage
-
-#### 3.4.3 Adversarial Robustness Metrics
-
-| Metric | Definition |
-|--------|------------|
-| **Attack Success Rate (ASR)** | Fraction of adversarial examples (with CSR=1.0) that cause misclassification |
-| **DR@attack** | Detection Rate of the NIDS under adversarial conditions |
-| **Robustness Gap** | Clean F1 − Adversarial F1 |
-| **Transfer Rate** | ASR when adversarial examples from Model A are evaluated on Model B（見下） |
-| **Timing Sensitivity Curve** | ASR as a function of injection time offset Δt prior to attack event（TAEI 專屬） |
-| **Memory Half-Life (T½)** | 停止 MPA 注入後，DR@attack 恢復至原始值 50% 所需時間步數（參照存活分析中位存活時間的定義）。若在 `max_steps` 內未恢復，記為 censored（T½ > max_steps）。另外報告 T₉₀（恢復至 90% 所需時間）作為次要指標。 |
-| **Memory Degradation Δ** | $\Delta = \text{DR}_{\text{clean}} - \text{DR}_{\text{poisoned}}$（MPA 污染效果量化）；正規化版本 $\Delta_{\text{norm}} = \Delta / \text{DR}_{\text{clean}}$ 以消除模型間基準線差異 |
-
-**Transfer Rate 定義細節**
-
-| 問題 | 規範 |
-|------|------|
-| 在哪個集合生成？ | Test set of the **source model** |
-| 在哪個集合評估？ | 相同的 test set（兩個模型使用相同資料切分） |
-| 靜態 → 時序跨格式？ | 攻擊特徵向量可直接轉移；圖拓撲若不相容則僅評估特徵層攻擊 |
-
-#### 3.4.4 Comparison Matrix
-
-每個攻擊方法 × 每個模型（√ = 完整評估；B = baseline/對照；N/A = 結構上不適用；† = Phase 5 補充）：
-
-| | GraphSAGE | GAT | GraphMixer† | TGAT | TGN |
-|---|:---:|:---:|:---:|:---:|:---:|
-| C-PGD（white-box） | ✓ | ✓ | ✓† | ✓ | ✓ |
-| TAEI 白箱 | B | B | B† | ⭐ 主要目標 | ⭐ 主要目標 |
-| TAEI 黑箱（代理轉移） | ✓ | ✓ | ✓† | ⭐ 主要目標 | ⭐ 主要目標 |
-| MPA（Memory Poisoning） | N/A | N/A | N/A†（驗證記憶假設） | ⭐ 主要目標 | ⭐ 主要目標 |
-| WGAN-GP（black-box） | ✓ | ✓ | ✓† | ✓ | ✓ |
-| After Adv. Training | ✓ | ✓ | — | ✓ | ✓ |
-
-> N/A 格（GraphSAGE/GAT/GraphMixer 對 MPA）本身是重要的陰性結果：驗證了「記憶機制是 MPA 先決條件」的假設。這在論文中應作為 **Evidence for the Core Thesis** 而非缺失項目呈現。
-
-#### 3.4.5 Comparison Script: Hydra `instantiate`
-
-`eval/comparison.py` 透過 Hydra 動態載入模型與攻擊，不直接 import 任何具體類別。新增模型或攻擊只需新增對應 YAML，不需修改評估腳本。
-
-```python
-# eval/comparison.py
-from hydra.utils import instantiate
-import hydra
-from omegaconf import DictConfig
-
-@hydra.main(config_path="../configs", config_name="eval/full_matrix")
-def main(cfg: DictConfig) -> None:
-    from src.utils.seed import set_global_seed
-    set_global_seed(cfg.seed)
-
-    model  = instantiate(cfg.model)   # 由 configs/model/*.yaml 決定
-    attack = instantiate(cfg.attack)  # 由 configs/attack/*.yaml 決定
-
-    adv_data = attack.generate(model, test_data)
-    metrics  = evaluator.compute(model, adv_data)
-    ...
-```
-
-#### 3.4.6 Adversarial Training
-
-- Generate adversarial examples using C-PGD on **training set**
-- Mix with clean examples at ratio 1:1
-- Retrain model for same number of epochs
-- Evaluate on both clean and adversarial **test sets**
-- Report robustness-accuracy trade-off curve
-- TGN/TGAT: use `memory_reset_policy: per_epoch` during adversarial training
 
 ---
 
@@ -876,135 +520,240 @@ Strictly chronological — no random shuffling to avoid temporal leakage:
 
 ---
 
-## 5. Experimental Configuration
+## 5. Frontend Views
 
-All experiments managed via Hydra config files under `configs/`.
+All five views are Vue 3 single-file components under `frontend/src/views/`. They share state through Pinia stores and communicate with the backend via the axios API client in `frontend/src/api/`.
 
-### 5.1 Key Hyperparameters
+### 5.1 View ① — Traffic Graph (`TrafficGraph.vue`)
 
-| Parameter | Default | Search Range |
-|-----------|---------|-------------|
-| **seed** | **42** | fixed（reproducibility） |
-| Time window size | 60s | {30, 60, 120} |
-| GNN hidden dim | 256 | {128, 256, 512} |
-| PGD steps | 40 | {10, 20, 40} |
-| PGD step size α | 0.01 | {0.001, 0.01, 0.1} |
-| Perturbation budget ε | 0.1 | {0.05, 0.1, 0.2} |
-| Adv. training mix ratio | 1:1 | {1:3, 1:1, 3:1} |
-| `save_every` (epochs) | 5 | fixed |
+**Library:** Cytoscape.js
 
-### 5.2 Hardware Requirements
+**Data source:** `GET /api/graph/{session_id}`
 
-| Component | Minimum | Recommended |
-|-----------|---------|-------------|
-| GPU | NVIDIA GTX 1080 (8GB VRAM) | NVIDIA RTX 3090 (24GB VRAM) |
-| RAM | 16 GB | 32 GB |
-| Storage | 20 GB | 50 GB |
-| CUDA | 12.4 | 12.4+ |
+**Cytoscape.js element schema:**
 
----
+```typescript
+interface CyNode { data: { id: string; ip: string; riskScore: number } }
+interface CyEdge {
+  data: {
+    id: string; source: string; target: string
+    prediction: string; confidence: number; flowId: string
+  }
+}
+```
 
-## 6. Risks and Mitigations
+**Visual encoding:**
 
-| Risk | Probability | Impact | Mitigation |
-|------|-------------|--------|------------|
-| Temporal graph pipeline takes >2 months | Medium | High | Use PyG built-in `TemporalData`; avoid custom PCAP processing |
-| TGAT experiments incomplete by month 9 | Medium | Medium | Month 6 hard checkpoint; TGAT is additive, not core |
-| Constraint satisfaction rate too low | Low | High | Iteratively relax constraints with documented justification per constraint type |
-| GAN training instability | Medium | Low | Early-stop when any of the 3 instability criteria triggers; fall back to C-PGD only |
-| NF-UNSW-NB15-v2 label noise | Low | Medium | Manual inspection of ambiguous samples; document exclusions |
-| OOM on large static graph loading | Medium | Medium | Use PyG `Dataset` on-demand loading（see Section 3.1.2） |
-| TGN memory state inconsistency across attacks | Medium | High | Enforce `memory_reset_policy: before_each_attack` as default |
+| Property | Meaning |
+|----------|---------|
+| Node colour | Max risk score among incident edges: green < 0.5, orange 0.5–0.8, red > 0.8 |
+| Node size | Degree (log-scaled) |
+| Edge colour | Attack class colour (Benign=grey, DoS=red, DDoS=orange, Recon=yellow, …) |
+| Edge width | Confidence score (thicker = higher confidence) |
+
+**Interaction:** Click a node → sidebar shows all incident alerts. Click an edge → open alert detail. "Generate adversarial" button on alert detail triggers View ⑤.
+
+**Performance limit:** Render at most 500 nodes and 2 000 edges; server-side truncation to top-N by confidence score before sending.
 
 ---
 
-## 7. Milestones and Deliverables
+### 5.2 View ② — Alert List (`AlertList.vue`)
 
-| Month | Milestone | Deliverable |
-|-------|-----------|-------------|
-| 1–2 | 基礎設施完成 | `BaseNIDSModel`、`BaseAttack`、`seed.py`、`checkpoint.py`；靜態圖 pipeline；memory state tracker |
-| 3 | GraphSAGE / GAT baseline | Weighted F1 ≥ 0.90 on NF-UNSW-NB15-v2；C-PGD baseline ASR 表格 |
-| 4–5 | Temporal pipeline + TGAT / TGN | `data/processed/temporal/` populated；TGAT/TGN 訓練完成；memory reset policy 驗證 |
-| 6 | **Checkpoint：TAEI 核心實驗** | Timing Sensitivity Curve（TGAT/TGN）；靜態 vs 時序 TAEI ASR 比較；**確認 timing 效果顯著（論文核心結果）** |
-| 7 | Memory Poisoning Attack | MPA 實作完成；Memory Degradation Δ 與 Half-Life T½ 量化表格；記憶體狀態可視化 |
-| 8 | GAN + 全比較矩陣 | Black-box 結果；4 × 4 比較矩陣（含 N/A 格）；Transfer Rate 分析 |
-| 9 | 對抗訓練 + 跨資料集驗證 | Adversarial training 結果；NF-BoT-IoT-v2 遷移實驗；robustness-accuracy trade-off |
-| 10–11 | Paper writing | Draft manuscript（建議投 NDSS 2027 / USENIX Security 2027）；reviewer response 預演 |
-| 12 | Camera-ready + code release | 開源 GARF-NIDS；reproducible artifact（Docker + scripts） |
+**Data source:** `GET /api/alerts/{session_id}?sort=confidence&page=1&limit=50`
 
----
+Each alert row displays:
 
-## 8. Non-Goals
+| Column | Source |
+|--------|--------|
+| Flow ID | edge index |
+| Src → Dst | IP:Port strings |
+| Attack type | argmax of GNN logits |
+| Confidence | softmax probability of predicted class |
+| Top-3 features | GAT attention weights (if model = GAT) or top-3 by ±σ deviation |
+| Action | "View adversarial" button |
 
-The following are explicitly out of scope for this work:
-
-- Real-time packet capture and online inference (demo uses pre-recorded flows)
-- Host-based intrusion detection (audit logs, system calls)
-- LLM-based analysis
-- Deployment on embedded or edge hardware
-
-The following are deferred to future work:
-
-- **Certified adversarial robustness:** Formal verification (e.g., randomized smoothing for GNNs) is a natural extension. This work provides the empirical foundation; certification can follow once the attack surface is fully characterized.
-- **Adaptive defenses:** Defenses specifically designed to counter TAEI and MPA (e.g., memory regularization, anomaly detection on the memory update trajectory).
+Filtering: by attack type, confidence threshold slider, time window selector.
 
 ---
 
-## 9. References
+### 5.3 View ③ — Attack Timeline (`AttackTimeline.vue`)
 
-### 靜態圖神經網路
+**Library:** Plotly.js stacked bar chart
 
+**Data source:** `GET /api/timeline/{session_id}`
+
+X-axis: time window index (60 s buckets)
+Y-axis: flow count per attack class
+Stacking: one colour per attack class (matches View ① edge colours)
+
+Click a bar → View ① zooms to that time window's flows.
+
+---
+
+### 5.4 View ④ — Model Reliability Panel (`ReliabilityPanel.vue`)
+
+**Data source:** static file `data/metrics/reliability.json` (served by FastAPI as a static asset; pre-computed once offline)
+
+```json
+{
+  "graphsage": {
+    "clean_f1": 0.921,
+    "dr_under_cpgd_eps01": 0.743,
+    "delta_f1_after_adv_training": 0.058
+  },
+  "gat": {
+    "clean_f1": 0.934,
+    "dr_under_cpgd_eps01": 0.761,
+    "delta_f1_after_adv_training": 0.049
+  }
+}
+```
+
+**Display:**
+
+- Three cards per model: "Clean F1", "DR under attack", "After adversarial training"
+- Before/After bar chart for ΔF1
+- Tooltip: "Detection Rate under C-PGD (ε=0.1, 40 steps) — percentage of adversarial flows still correctly classified"
+
+---
+
+### 5.5 View ⑤ — Adversarial Comparison Report (`AdversarialReport.vue`)
+
+**Trigger:** user clicks "Generate adversarial" on an alert in View ②
+
+**API call:** `POST /api/adversarial` with `{ session_id, flow_id, epsilon, steps }`
+
+**Display — side-by-side comparison table:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Flow edge_47 │ Src: 10.0.0.4:6789  →  Dst: 10.0.0.5:22       │
+├──────────────────────┬──────────────────┬──────────────────────┤
+│ Feature              │ Original         │ Adversarial          │
+├──────────────────────┼──────────────────┼──────────────────────┤
+│ IN_PKTS              │ 60.0             │ 47.3  (−21.2%) 🔴    │
+│ IN_BYTES             │ 3 000            │ 2 891 ( −3.6%) 🔴    │
+│ FLOW_DURATION_MS     │ 150              │ 150   (  0.0%)       │
+│ SRC_TO_DST_BYTES/s   │ 20 000           │ 19 273 ← recomputed ✅│
+│ TCP_FLAGS            │ SYN (0x02)  ✅   │ SYN (0x02)        ✅ │
+├──────────────────────┴──────────────────┴──────────────────────┤
+│ Prediction:  DDoS  94.2%  →  Benign  61.2%                     │
+│ Constraint Satisfaction Rate:  1.0  ✅                          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+Row colours: red = changed feature, grey = unchanged. Green checkmark = constraint passed.
+
+**Export button:** `GET /api/report/{session_id}` → downloads PDF/HTML.
+
+---
+
+## 6. API Design
+
+Base URL: `http://localhost:8000/api`
+
+| Method | Path | Description | Request | Response |
+|--------|------|-------------|---------|----------|
+| `POST` | `/upload` | Upload CSV, create session | `multipart/form-data` file | `{ session_id, n_flows }` |
+| `POST` | `/analyze/{session_id}` | Run GNN inference on uploaded data | `{ model: "graphsage"\|"gat" }` | `{ status }` (async — poll `/status`) |
+| `GET` | `/status/{session_id}` | Poll analysis progress | — | `{ status, progress_pct }` |
+| `GET` | `/graph/{session_id}` | Cytoscape.js elements (truncated) | `?max_edges=2000` | `{ nodes[], edges[] }` |
+| `GET` | `/alerts/{session_id}` | Paginated alert list | `?sort&page&limit&attack_type` | `{ alerts[], total }` |
+| `GET` | `/timeline/{session_id}` | Per-window attack counts | — | Plotly-compatible JSON |
+| `POST` | `/adversarial` | Run C-PGD on one flow | `{ session_id, flow_id, epsilon, steps }` | adversarial comparison JSON (Section 3.3.3) |
+| `GET` | `/report/{session_id}` | Download PDF report | `?format=pdf\|html` | binary file |
+| `GET` | `/metrics` | Static model reliability metrics | — | `reliability.json` content |
+
+**Error handling:** all endpoints return `{ detail: string }` with appropriate HTTP status on failure. Analysis errors (e.g. malformed CSV, unsupported columns) return `422`.
+
+---
+
+## 7. Report Generation
+
+**Template:** `app/templates/report.html.j2` (Jinja2)
+
+**Sections in generated report:**
+
+1. **Summary** — session timestamp, uploaded filename, total flows, attack/benign ratio
+2. **Top Alerts** — table of top-20 alerts by confidence, with attack type and source/destination
+3. **Attack Distribution** — embedded Plotly PNG of the timeline chart
+4. **Traffic Graph Snapshot** — static PNG export of Cytoscape.js graph (generated server-side with `cytoscape-png` or Selenium headless)
+5. **Model Reliability** — the three metric cards from View ④
+6. **Adversarial Sample Analysis** — the comparison table(s) for any flows the user generated adversarial examples for
+7. **Methodology Note** — brief description of models used, constraint enforcement, and dataset reference
+
+**PDF generation:** `WeasyPrint` converts the rendered HTML to PDF. The same Jinja2 template renders both HTML download and PDF — the only difference is whether the browser renders it or WeasyPrint does.
+
+---
+## 8. Demo Dataset Strategy
+
+The repository includes a curated 1 000-flow demo CSV (`data/demo/demo_flows.csv`) so reviewers and users can try the tool without downloading the full NF-UNSW-NB15-v2 dataset (~2.5 M flows).
+
+**Curation criteria:**
+
+| Criterion | Value |
+|-----------|-------|
+| Total flows | 1 000 |
+| Benign flows | ~400 (40 %) |
+| Attack flows | ~600 (60 %, balanced across attack types) |
+| Time span | 10 minutes of synthetic-realistic traffic |
+| Attack types included | DoS, Reconnaissance, Exploits, Backdoor, Fuzzers |
+
+**How it was built:**
+
+1. Stratified sample from the NF-UNSW-NB15-v2 test split (chronological order preserved).
+2. All 34 NF features retained; no feature engineering applied.
+3. Verified that `static_builder.py` produces at least 3 non-trivial time windows.
+4. Adversarial comparison: 10 high-confidence attack flows pre-selected and their C-PGD adversarial counterparts pre-computed (`data/demo/demo_adversarial.json`).
+
+The demo CSV is tracked by git. The full datasets are not.
+
+---
+
+## 9. Milestones
+
+### Phase 1 — Core Tool (Weeks 1–8)
+
+| Week | Milestone | Deliverable |
+|------|-----------|-------------|
+| 1–2 | Project scaffold | FastAPI app skeleton, Vue 3 + Vite scaffold, Pinia stores, API client |
+| 3 | Data pipeline | `static_builder.py` tested on demo CSV; PyG Data objects generated |
+| 4 | GNN training | GraphSAGE + GAT trained on NF-UNSW-NB15-v2; checkpoints saved |
+| 5 | Inference service | `POST /analyze` returns graph JSON + alert list |
+| 6 | Traffic graph view | Cytoscape.js rendering; click-to-inspect nodes |
+| 7 | Alert list + timeline | Alert list with feature importance; Plotly.js stacked bar chart |
+| 8 | Model reliability panel | `compute_reliability_metrics.py`; pre-computed `reliability.json` served |
+
+### Phase 2 — Adversarial & Depth (Weeks 9–12)
+
+| Week | Milestone | Deliverable |
+|------|-----------|-------------|
+| 9 | C-PGD module | `src/attack/cpgd.py`; constraint projection; CSR = 1.0 enforced |
+| 10 | Adversarial comparison view | Side-by-side table; delta% per feature; constraint status indicators |
+| 11 | Report generation | Jinja2 template; WeasyPrint PDF; HTML download |
+| 12 | Demo polish + docs | `data/demo/` curated; README screenshots; public GitHub release |
+
+### Phase 3 — Temporal Models (Future)
+
+- TGAT / TGN models for dynamic graph inference
+- PCAP to NetFlow conversion via nfstream
+- Memory Poisoning Attack visualization
+
+---
+
+## 10. References
+
+**GNN Models**
 - Hamilton, W., et al. "Inductive Representation Learning on Large Graphs." *NeurIPS 2017.* — GraphSAGE
 - Veličković, P., et al. "Graph Attention Networks." *ICLR 2018.* — GAT
-
-### 時序圖神經網路
-
 - Xu, D., et al. "Inductive Representation Learning on Temporal Graphs." *ICLR 2020.* — TGAT
 - Rossi, E., et al. "Temporal Graph Networks for Deep Learning on Dynamic Graphs." *arXiv 2020.* — TGN
-- Cong, W., et al. "Do We Really Need Complicated Model Architectures For Temporal Networks?" *ICLR 2023.* — GraphMixer（含記憶機制的現代對照組）
-- Yu, L., et al. "Towards Better Dynamic Graph Learning: New Architecture and Unified Library." *NeurIPS 2023.* — DyGLib / DyGFormer
-- Huang, S., et al. "Temporal Graph Benchmark for Machine Learning on Temporal Graphs." *NeurIPS 2023.* — TGB（標準評估協定）
 
-### 網路入侵偵測
-
-- Mirsky, Y., et al. "Kitsune: An Ensemble of Autoencoders for Online Network Intrusion Detection." *NDSS 2018.*
+**GNN-based NIDS**
 - Lo, W. W., et al. "E-GraphSAGE: A GNN-based IDS for IoT." *IEEE NOMS 2022.*
-- Caville, E., et al. "Anomal-E: A Self-Supervised NIDS based on GNNs." *Knowledge-Based Systems 2022.*
 - Bilot, T., et al. "Graph Neural Networks for Intrusion Detection: A Survey." *IEEE Access 2023.*
 
-### Problem-Space 約束框架（CAAG 的理論根基）
-
-- **Pierazzi, F., et al. "Intriguing Properties of Adversarial ML Attacks in the Problem Space." *IEEE S&P 2020.*** — 奠基之作，形式化定義 problem-space constraints；CAAG 在此框架下延伸至 NetFlow 時序圖
-- **Chernikova, A., & Oprea, A. "FENCE: Feasibility-based Evasion for Network-based Classifier Evaluation." *ACM TOPS 2022.*** — 針對網路流量分類器的可行性約束；CAAG 的直接前驅（差異：CAAG 額外處理圖拓撲、語義保留、邊注入度數限制）
-
-### 對抗式機器學習基礎
-
-- Goodfellow, I., et al. "Explaining and Harnessing Adversarial Examples." *ICLR 2015.* — FGSM
+**Adversarial Attacks on NIDS**
+- Han, D., et al. "Practical Traffic-Space Adversarial Attacks on Learning-Based NIDSs." *USENIX Security 2021.* — BAAAN
+- Pierazzi, F., et al. "Intriguing Properties of Adversarial ML Attacks in the Problem Space." *IEEE S&P 2020.*
 - Madry, A., et al. "Towards Deep Learning Models Resistant to Adversarial Attacks." *ICLR 2018.* — PGD
-- Arjovsky, M., et al. "Wasserstein GAN." *ICML 2017.* — WGAN
-- Croce, F., & Hein, M. "Reliable Evaluation of Adversarial Robustness with an Ensemble of Diverse Parameter-free Attacks." *ICML 2020.* — AutoAttack
-
-### 圖對抗攻擊與防禦
-
-- Zügner, D., et al. "Adversarial Attacks on Neural Networks for Graph Data." *KDD 2018.* — Nettack
-- Zügner, D., & Günnemann, S. "Adversarial Attacks on GNNs via Meta Learning." *ICLR 2019.* — MetaAttack
-- Jin, W., et al. "Graph Structure Learning for Robust Graph Neural Networks." *KDD 2020.* — Pro-GNN
-- Geisler, S., et al. "Robustness of Graph Neural Networks at Scale." *NeurIPS 2021.*
-- **Mujkanovic, S., et al. "Are Defenses for Graph Neural Networks Robust?" *NeurIPS 2022.*** — 現有 GNN 防禦的實際穩健性分析；為本研究的防禦評估提供方法論參照
-- Wan, C., et al. "Adversarial Attack and Defense on Graph Data: A Survey." *IEEE TKDE 2023.*
-
-### GNN 後門攻擊（與 MPA 的差異定位）
-
-- **Xi, Z., et al. "Graph Backdoor." *USENIX Security 2021.*** — 訓練期植入觸發子圖；MPA 的主要對比工作（MPA 在推論期操作，無需污染訓練資料）
-- **Zhang, Z., et al. "Backdoor Attacks to Graph Neural Networks." *SACMAT 2021.*** — 靜態 GNN 後門攻擊的系統性分析
-
-### NIDS 對抗式攻擊
-
-- Apruzzese, G., et al. "Modeling Realistic Adversarial Attacks against NIDS." *ACM DTRAP 2021.*
-- Han, D., et al. "Practical Traffic-Space Adversarial Attacks on Learning-Based NIDSs." *USENIX Security 2021.* — BAAAN；本研究最直接的比較基準（Section 3.3.5 中量化 CSR 差距）
-- Yuan, X., et al. "A Simple Framework to Enhance Adversarial Robustness of DL-based IDS." *Computers & Security 2024.*
-- Okada, K., et al. "XAI-driven Adversarial Attacks on Network Intrusion Detectors." *EICC 2024.*
-
-### 持久性攻擊與資料投毒
-
-- Wallace, E., et al. "Concealed Data Poisoning Attacks on NLP Models." *NAACL 2021.* — 記憶污染概念在 NLP 的對應工作
