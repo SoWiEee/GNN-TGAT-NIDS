@@ -19,7 +19,7 @@
 |---|---------|-------------|
 | 🔵 | **Interactive Traffic Graph** | IP nodes + flow edges coloured by risk level. Click any node to inspect its connections and threat score. |
 | 🔔 | **Alert List** | Per-flow alerts with attack type, confidence score, and the top features that triggered detection (via GAT attention weights). |
-| 📊 | **Attack Timeline** | Stacked time-series showing attack-type distribution across 60-second windows. Spot bursts and campaign patterns at a glance. |
+| 📊 | **Attack Timeline** | Stacked time-series showing attack-type distribution across 300-second windows. Spot bursts and campaign patterns at a glance. |
 | 🛡️ | **Model Reliability Panel** | Pre-computed metrics answering "how trustworthy is this system?": clean F1, detection rate under adversarial attack, and improvement after adversarial training. |
 | ⚗️ | **Adversarial Comparison Report** | Side-by-side view of original vs. adversarially-perturbed flows — which features changed, by how much, and whether all network protocol constraints are still satisfied. Exportable as PDF / HTML. |
 
@@ -34,7 +34,7 @@ flowchart LR
     end
 
     subgraph Backend["Backend — FastAPI"]
-        SB["Static Graph Builder\n60 s tumbling windows"]
+        SB["Static Graph Builder\n300 s tumbling windows"]
         GNN["GNN Inference\nGraphSAGE / GAT"]
         ADV["Adversarial Module\nC-PGD + Constraint Check"]
         RPT["Report Generator\nJinja2 → PDF / HTML"]
@@ -78,18 +78,22 @@ uv run pip install pyg_lib torch_scatter torch_sparse torch_cluster \
 uv run pytest
 ```
 
-### 2. Pre-process demo dataset
+### 2. Prepare dataset
 
 ```bash
-# Download NF-UNSW-NB15-v2.csv from UNSW and place in data/raw/
-uv run python src/data/static_builder.py --config-name static_default
+# Merge UNSW-NB15 training + testing CSVs → data/raw/NF-UNSW-NB15-v2.csv
+# Also creates data/demo/demo_flows.csv (1 000-flow stratified sample)
+uv run python scripts/create_demo_dataset.py
+
+# Build PyG time-window graphs from the merged CSV
+uv run python src/data/static_builder.py
 ```
 
 ### 3. Train models (or use pre-trained checkpoints)
 
 ```bash
-uv run python train.py model=graphsage data=static_default
-uv run python train.py model=gat data=static_default
+uv run python train.py model=graphsage
+uv run python train.py model=gat
 ```
 
 ### 4. Pre-compute model reliability metrics
@@ -114,6 +118,94 @@ The FastAPI backend starts automatically when the frontend makes its first reque
 
 ```bash
 uv run uvicorn app.main:app --reload --port 8000
+```
+
+---
+
+## Training Optimization
+
+### Graph node construction — proxy identity from TTL + protocol
+
+UNSW-NB15 processed CSVs contain no IP address columns, which causes a
+degenerate 2-node graph per time-window (all flows share the same
+`unknown_src → unknown_dst` pair).  GNN message passing over a 2-node graph
+adds global window noise to every edge embedding rather than useful neighbourhood
+signal.
+
+**Fix:** `static_builder.py` now builds proxy node identities from columns that
+are available in the dataset:
+
+| Role | Key | Rationale |
+|---|---|---|
+| Source node | `("src", sttl // 16, proto)` | TTL bin ≈ OS type (Linux 64→4, Windows 128→8, Cisco 255→15) + protocol |
+| Destination node | `("dst", dttl // 16, service)` | TTL + service ≈ server/service segment |
+
+This produces **~20–50 distinct nodes per window** instead of 2, enabling
+meaningful neighbourhood aggregation.  Observed effect: val F1 improved from
+~0.50 to ~0.84 with the same architecture and only 5 training epochs.
+
+### Time-window size
+
+Default window changed **60 s → 300 s** (`configs/data/static_default.yaml`).
+Larger windows give denser graphs (~300 edges/window) at the cost of fewer total
+windows (860 vs 4 295).  Denser graphs give the GNN more neighbours per node.
+
+### Automatic Mixed Precision (AMP)
+
+Enabled by default on CUDA via `train.use_amp=true`.  Uses
+`torch.amp.autocast` + `GradScaler` — typically **1.5–2× faster** on modern
+GPUs with no accuracy loss.  Disable with `train.use_amp=false` if needed.
+
+### DataLoader tuning
+
+| Config key | Default | Effect |
+|---|---|---|
+| `train.batch_size` | `32` | Graph windows per batch (was 1) |
+| `train.num_workers` | `0` | Set to `4` on Linux for async data loading |
+| `train.val_every` | `1` | Evaluate on val set every N epochs; `5` saves ~20% time |
+| `train.save_every` | `10` | Periodic checkpoint cadence |
+
+### Hyperparameter search with Optuna
+
+```bash
+# Install dev extras (includes optuna + optuna-dashboard)
+uv sync --group dev
+
+# Search GraphSAGE — 50 Bayesian trials × 30 epochs each (~45 min on GPU)
+uv run python scripts/tune_hyperparams.py --model graphsage --trials 50
+
+# Search GAT in a second terminal
+uv run python scripts/tune_hyperparams.py --model gat --trials 50
+
+# Live dashboard while running (open http://localhost:8080)
+uv run optuna-dashboard sqlite:///results/optuna.db
+```
+
+The search is **resume-safe** — re-running the same command continues from
+where it left off (SQLite storage).  Best parameters are saved to
+`results/best_hparams_{model}.json`.
+
+**Search space:**
+
+| Hyperparameter | Range / Choices |
+|---|---|
+| `lr` | 1 × 10⁻⁴ → 1 × 10⁻² (log scale) |
+| `hidden_dim` | 128 / 256 / 512 |
+| `num_layers` | 2 / 3 / 4 |
+| `dropout` | 0.0 → 0.5 |
+| `batch_size` | 16 / 32 / 64 |
+| `num_heads` (GAT only) | 2 / 4 / 8 |
+| `aggregation` (SAGE only) | mean / max |
+
+Pruning (MedianPruner) stops unpromising trials after 10 epochs — effectively
+free early stopping during search.
+
+**Apply best params to full training:**
+```bash
+# Example — substitute values from results/best_hparams_graphsage.json
+uv run python train.py model=graphsage \
+  model.hidden_dim=128 model.num_layers=2 model.dropout=0.1 \
+  train.lr=0.0087 train.batch_size=16 train.epochs=200
 ```
 
 ---
@@ -164,7 +256,9 @@ GNN-NIDS-Analyzer/
 │   ├── package.json
 │   └── vite.config.ts
 ├── scripts/
-│   └── compute_reliability_metrics.py
+│   ├── create_demo_dataset.py      ← merge UNSW-NB15 CSVs, create demo sample
+│   ├── compute_reliability_metrics.py ← clean F1 + C-PGD DR → reliability.json
+│   └── tune_hyperparams.py         ← Optuna Bayesian hyperparameter search
 ├── configs/                    # Hydra configs
 ├── data/
 │   ├── raw/                    ← place dataset CSVs here (git-ignored)
