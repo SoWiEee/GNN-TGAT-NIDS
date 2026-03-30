@@ -337,19 +337,20 @@ def build_static_graphs(
     return meta
 
 
-@hydra.main(config_path="../../configs/data", config_name="static_default", version_base=None)
+@hydra.main(config_path="../../configs", config_name="static_pipeline", version_base=None)
 def main(cfg: DictConfig) -> None:
     from omegaconf import OmegaConf
 
     print(OmegaConf.to_yaml(cfg))
 
+    d = cfg.data
     meta = build_static_graphs(
-        csv_path=cfg.raw_path,
-        output_dir=cfg.processed_dir,
-        window_size_s=cfg.window_size_s,
-        ratios=tuple(cfg.splits),
-        clip_sigma=cfg.normalization.clip_sigma,
-        label_col=cfg.get("label_col", None),
+        csv_path=d.raw_path,
+        output_dir=d.processed_dir,
+        window_size_s=d.window_size_s,
+        ratios=tuple(d.splits),
+        clip_sigma=d.normalization.clip_sigma,
+        label_col=d.get("label_col", None),
     )
 
     print(f"Built {sum(meta['split_counts'].values())} total windows.")
