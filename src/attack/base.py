@@ -48,7 +48,7 @@ class BaseAttack(ABC):
         ...
 
     @abstractmethod
-    def constraint_check(self, x_adv) -> bool:
+    def constraint_check(self, x_adv, attack_label: int | None = None) -> bool:
         """Return True only if **all** constraints in the constraint set are met.
 
         This is the per-sample gate that enforces CSR = 1.0: only samples
@@ -56,6 +56,9 @@ class BaseAttack(ABC):
 
         Args:
             x_adv: Raw-scale (inverse-transformed) feature vector or batch.
+            attack_label: Optional integer attack class used for semantic
+                preservation checks (e.g. DDoS must retain high packet rate).
+                Pass ``None`` to skip semantic enforcement.
 
         Returns:
             ``True`` if every constraint (protocol validity, co-dependency,
@@ -73,7 +76,7 @@ class BaseAttack(ABC):
         Args:
             x_batch: Iterable of raw-scale feature vectors.
             attack_labels: Optional iterable of integer attack class labels,
-                passed to ``constraint_check`` for semantic preservation checks.
+                forwarded to ``constraint_check`` for semantic preservation.
 
         Returns:
             CSR in [0.0, 1.0]. 1.0 means every sample satisfies all constraints.
@@ -81,10 +84,11 @@ class BaseAttack(ABC):
         items = list(x_batch)
         if not items:
             return 1.0
-        labels = list(attack_labels) if attack_labels is not None else [None] * len(items)
+        labels: list[int | None] = (
+            list(attack_labels) if attack_labels is not None else [None] * len(items)
+        )
         satisfied = sum(
             1 for x, lbl in zip(items, labels)
-            if self.constraint_check(x) if lbl is None
-            else self.constraint_check(x)
+            if self.constraint_check(x, lbl)
         )
         return satisfied / len(items)

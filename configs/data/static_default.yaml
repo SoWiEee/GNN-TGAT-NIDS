@@ -8,11 +8,8 @@ scaler_path:    ${paths.data_processed}/static/scaler.pkl
 # Tumbling window size in seconds
 window_size_s: 60
 
-# Chronological split ratios — must sum to 1.0
-splits:
-  train: 0.60
-  val:   0.20
-  test:  0.20
+# Chronological split ratios — must sum to 1.0 (list, not dict)
+splits: [0.60, 0.20, 0.20]
 
 # Z-score normalisation: fit on train split only; clip at ±3σ
 normalization:

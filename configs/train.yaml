@@ -8,4 +8,4 @@ train:
   lr: 0.001
   epochs: 200
   save_every: 5         # save checkpoint every N epochs
-  checkpoint_dir: ${paths.checkpoints}/${model._target_}
+  checkpoint_dir: ${paths.checkpoints}/${hydra:runtime.choices.model}

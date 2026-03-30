@@ -36,14 +36,22 @@ class StaticNIDSDataset(Dataset):
         if split not in ("train", "val", "test"):
             raise ValueError(f"split must be 'train', 'val', or 'test', got {split!r}")
 
-        self._root = Path(root)
+        # Store path info before super().__init__ so that process()/download()
+        # no-ops can safely reference self._root_path if ever overridden.
+        self._root_path = Path(root)
         self._split = split
-        self._split_dir = self._root / split
+        self._split_dir = self._root_path / split
 
-        # Load metadata
-        meta_path = self._root / "meta.json"
+        # Call super first — canonical PyG pattern.
+        # process() and download() are no-ops so _files is not yet needed.
+        # PyG may create empty raw/ and processed/ directories alongside root;
+        # these are harmless side-effects of using the PyG Dataset base class.
+        super().__init__(root=str(root))
+
+        # Load metadata after super().__init__ so PyG internals are stable
+        meta_path = self._root_path / "meta.json"
         if not meta_path.exists():
-            raise FileNotFoundError(f"meta.json not found in {self._root}")
+            raise FileNotFoundError(f"meta.json not found in {self._root_path}")
 
         with open(meta_path) as f:
             self._meta: dict[str, Any] = json.load(f)
@@ -55,15 +63,16 @@ class StaticNIDSDataset(Dataset):
         self._scaler = None
         self._label2idx: dict[str, int] | None = None
 
-        # Do NOT call super().__init__() with transforms — we manage files manually
-        super().__init__(root=str(root))
-
     # ── PyG Dataset interface ────────────────────────────────────────────────
 
     def len(self) -> int:
         return len(self._files)
 
     def get(self, idx: int) -> Data:
+        # weights_only=False is required: PyG Data objects contain non-tensor
+        # attributes (edge_index metadata, etc.) that cannot be loaded safely
+        # with weights_only=True.  Files are produced by this codebase, so
+        # the pickle execution risk is acceptable.
         return torch.load(self._files[idx], weights_only=False)
 
     # ── Metadata helpers ─────────────────────────────────────────────────────
@@ -83,7 +92,7 @@ class StaticNIDSDataset(Dataset):
     @property
     def label2idx(self) -> dict[str, int]:
         if self._label2idx is None:
-            lbl_path = self._root / "label2idx.json"
+            lbl_path = self._root_path / "label2idx.json"
             with open(lbl_path) as f:
                 self._label2idx = json.load(f)
         return self._label2idx
@@ -92,7 +101,7 @@ class StaticNIDSDataset(Dataset):
     def scaler(self):
         """Return the StandardScaler fitted on the train split."""
         if self._scaler is None:
-            scaler_path = self._root / "scaler.pkl"
+            scaler_path = self._root_path / "scaler.pkl"
             with open(scaler_path, "rb") as f:
                 self._scaler = pickle.load(f)
         return self._scaler

@@ -154,8 +154,9 @@ class TestChronologicalSplit:
     def test_no_temporal_leakage(self):
         df = _simple_df()
         train, val, test = chronological_split(df, ratios=(0.6, 0.2, 0.2))
-        assert train["_ts"].max() <= val["_ts"].min()
-        assert val["_ts"].max() <= test["_ts"].min()
+        # strict: no shared boundary timestamps across splits
+        assert train["_ts"].max() < val["_ts"].min()
+        assert val["_ts"].max() < test["_ts"].min()
 
     def test_rows_sorted_by_timestamp(self):
         # Shuffle the DataFrame before splitting; split should re-sort
@@ -179,7 +180,7 @@ class TestChronologicalSplit:
         # properly formed inputs.  We verify assertions pass (no error).
         df = _simple_df()
         train, val, test = chronological_split(df)  # default 60/20/20
-        assert train["_ts"].max() <= val["_ts"].min()
+        assert train["_ts"].max() < val["_ts"].min()
 
 
 # ── get_feature_columns ───────────────────────────────────────────────────────

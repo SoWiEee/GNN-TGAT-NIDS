@@ -53,12 +53,13 @@ def load_csv(path: str | Path, timestamp_col: str | None = None, label_col: str 
             .astype(np.int64)
             .astype(np.float64)
         )
-        # Fall back to row index for rows that couldn't be parsed (NaT → -9223...)
-        epoch_floor = pd.Timestamp("1970-01-01").timestamp()  # 0.0
-        # Rows that failed to parse will have very large negative int64 values
+        # Fall back to row position for rows that couldn't be parsed (NaT).
+        # Using np.where gives actual integer positions (0-based), which are
+        # guaranteed to be monotone regardless of the DataFrame's index type.
         failed_mask = ts_parsed.isna()
         if failed_mask.any():
-            df.loc[failed_mask, "_ts"] = df.index[failed_mask].astype(np.float64)
+            positions = np.where(failed_mask.values)[0].astype(np.float64)
+            df.loc[failed_mask, "_ts"] = positions
     else:
         # No time column — use row index as a proxy
         df["_ts"] = np.arange(len(df), dtype=np.float64)
@@ -171,16 +172,20 @@ def chronological_split(
     assert len(test_df) == n_test, "Split size mismatch."
 
     # Temporal leakage checks
+    # Strictly non-overlapping: each split's last timestamp must be strictly
+    # earlier than the next split's first timestamp.  Equal boundary timestamps
+    # would place the same real-world moment in two splits, which constitutes
+    # temporal leakage for time-series classification.
     if len(train_df) > 0 and len(val_df) > 0:
-        assert train_df[ts_col].max() <= val_df[ts_col].min(), (
-            "Temporal leakage: train max_ts > val min_ts. "
-            f"({train_df[ts_col].max()} > {val_df[ts_col].min()})"
+        assert train_df[ts_col].max() < val_df[ts_col].min(), (
+            "Temporal leakage: train max_ts >= val min_ts. "
+            f"(train_max={train_df[ts_col].max()}, val_min={val_df[ts_col].min()})"
         )
 
     if len(val_df) > 0 and len(test_df) > 0:
-        assert val_df[ts_col].max() <= test_df[ts_col].min(), (
-            "Temporal leakage: val max_ts > test min_ts. "
-            f"({val_df[ts_col].max()} > {test_df[ts_col].min()})"
+        assert val_df[ts_col].max() < test_df[ts_col].min(), (
+            "Temporal leakage: val max_ts >= test min_ts. "
+            f"(val_max={val_df[ts_col].max()}, test_min={test_df[ts_col].min()})"
         )
 
     return train_df, val_df, test_df

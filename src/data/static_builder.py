@@ -62,60 +62,81 @@ def _resolve_col(df: pd.DataFrame, primary: str) -> str | None:
     return None
 
 
+def _get_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    """Return the first candidate column name that exists in ``df``."""
+    return next((c for c in candidates if c in df.columns), None)
+
+
+def _make_key_series(
+    df: pd.DataFrame,
+    ip_col: str | None,
+    port_col: str | None,
+    default_ip: str,
+) -> list[tuple]:
+    """Return a list of (ip, port) tuples without row-wise iteration."""
+    ip_vals = (
+        df[ip_col].fillna(default_ip).astype(str).tolist()
+        if ip_col
+        else [default_ip] * len(df)
+    )
+    port_vals = (
+        df[port_col].fillna(0).astype(int).tolist()
+        if port_col
+        else [0] * len(df)
+    )
+    return list(zip(ip_vals, port_vals))
+
+
 def _build_node_index(df_window: pd.DataFrame) -> dict[tuple, int]:
-    """Map (src_ip, src_port) and (dst_ip, dst_port) tuples to integer indices."""
-    src_ip_col = next((c for c in ["IPV4_SRC_ADDR", "src_ip", "Src IP"] if c in df_window.columns), None)
-    dst_ip_col = next((c for c in ["IPV4_DST_ADDR", "dst_ip", "Dst IP"] if c in df_window.columns), None)
-    src_port_col = next((c for c in ["L4_SRC_PORT", "src_port", "Src Port"] if c in df_window.columns), None)
-    dst_port_col = next((c for c in ["L4_DST_PORT", "dst_port", "Dst Port"] if c in df_window.columns), None)
+    """Map (ip, port) endpoint tuples to integer node indices.
 
-    node2idx: dict[tuple, int] = {}
-    counter = 0
-
-    for _, row in df_window.iterrows():
-        src_key = (
-            row[src_ip_col] if src_ip_col else "unknown_src",
-            row[src_port_col] if src_port_col else 0,
-        )
-        dst_key = (
-            row[dst_ip_col] if dst_ip_col else "unknown_dst",
-            row[dst_port_col] if dst_port_col else 0,
-        )
-        if src_key not in node2idx:
-            node2idx[src_key] = counter
-            counter += 1
-        if dst_key not in node2idx:
-            node2idx[dst_key] = counter
-            counter += 1
-
-    return node2idx
+    Node identity is at (IP, port) granularity — the same physical host
+    appearing on different ports generates distinct nodes.  This is a
+    deliberate modeling choice: flows are port-level connections, not
+    host-level connections.
+    """
+    src_keys = _make_key_series(
+        df_window,
+        _get_col(df_window, ["IPV4_SRC_ADDR", "src_ip", "Src IP"]),
+        _get_col(df_window, ["L4_SRC_PORT", "src_port", "Src Port"]),
+        "unknown_src",
+    )
+    dst_keys = _make_key_series(
+        df_window,
+        _get_col(df_window, ["IPV4_DST_ADDR", "dst_ip", "Dst IP"]),
+        _get_col(df_window, ["L4_DST_PORT", "dst_port", "Dst Port"]),
+        "unknown_dst",
+    )
+    # dict.fromkeys preserves insertion order and deduplicates in O(n)
+    unique_keys = list(dict.fromkeys(src_keys + dst_keys))
+    return {k: i for i, k in enumerate(unique_keys)}
 
 
 def _compute_node_features(df_window: pd.DataFrame, node2idx: dict[tuple, int]) -> torch.Tensor:
-    """Aggregate edge-level statistics per node to produce node feature matrix.
+    """Aggregate edge-level statistics per source node (vectorized).
 
     Returns a tensor of shape ``[num_nodes, 5]``.
     """
     n_nodes = len(node2idx)
-    node_feat = np.zeros((n_nodes, 5), dtype=np.float32)
+    node_feat = np.zeros((n_nodes, len(_NODE_AGG_FEATURES)), dtype=np.float32)
 
-    src_ip_col = next((c for c in ["IPV4_SRC_ADDR", "src_ip", "Src IP"] if c in df_window.columns), None)
-    src_port_col = next((c for c in ["L4_SRC_PORT", "src_port", "Src Port"] if c in df_window.columns), None)
+    src_keys = _make_key_series(
+        df_window,
+        _get_col(df_window, ["IPV4_SRC_ADDR", "src_ip", "Src IP"]),
+        _get_col(df_window, ["L4_SRC_PORT", "src_port", "Src Port"]),
+        "unknown_src",
+    )
+    # Map each row's source key to its node index (-1 for unknown keys)
+    src_idx = np.array([node2idx.get(k, -1) for k in src_keys], dtype=np.intp)
+    valid = src_idx >= 0
 
-    resolved = [_resolve_col(df_window, p) for p in _NODE_AGG_FEATURES]
-
-    for _, row in df_window.iterrows():
-        src_key = (
-            row[src_ip_col] if src_ip_col else "unknown_src",
-            row[src_port_col] if src_port_col else 0,
-        )
-        if src_key in node2idx:
-            idx = node2idx[src_key]
-            for fi, col in enumerate(resolved):
-                if col is not None and col in df_window.columns:
-                    val = row[col]
-                    if pd.notna(val):
-                        node_feat[idx, fi] += float(val)
+    for fi, feat_name in enumerate(_NODE_AGG_FEATURES):
+        col = _resolve_col(df_window, feat_name)
+        if col is None or col not in df_window.columns:
+            continue
+        vals = df_window[col].fillna(0.0).values.astype(np.float32)
+        # np.add.at performs unbuffered in-place addition (handles repeated indices)
+        np.add.at(node_feat[:, fi], src_idx[valid], vals[valid])
 
     return torch.from_numpy(node_feat)
 
@@ -128,30 +149,31 @@ def _build_pyg_graph(
     scaler: StandardScaler | None = None,
 ) -> Data:
     """Build a PyG Data object from a single time-window DataFrame."""
-    src_ip_col = next((c for c in ["IPV4_SRC_ADDR", "src_ip", "Src IP"] if c in df_window.columns), None)
-    dst_ip_col = next((c for c in ["IPV4_DST_ADDR", "dst_ip", "Dst IP"] if c in df_window.columns), None)
-    src_port_col = next((c for c in ["L4_SRC_PORT", "src_port", "Src Port"] if c in df_window.columns), None)
-    dst_port_col = next((c for c in ["L4_DST_PORT", "dst_port", "Dst Port"] if c in df_window.columns), None)
+    src_keys = _make_key_series(
+        df_window,
+        _get_col(df_window, ["IPV4_SRC_ADDR", "src_ip", "Src IP"]),
+        _get_col(df_window, ["L4_SRC_PORT", "src_port", "Src Port"]),
+        "unknown_src",
+    )
+    dst_keys = _make_key_series(
+        df_window,
+        _get_col(df_window, ["IPV4_DST_ADDR", "dst_ip", "Dst IP"]),
+        _get_col(df_window, ["L4_DST_PORT", "dst_port", "Dst Port"]),
+        "unknown_dst",
+    )
 
-    # Edge index
-    src_indices, dst_indices = [], []
-    for _, row in df_window.iterrows():
-        src_key = (
-            row[src_ip_col] if src_ip_col else "unknown_src",
-            row[src_port_col] if src_port_col else 0,
-        )
-        dst_key = (
-            row[dst_ip_col] if dst_ip_col else "unknown_dst",
-            row[dst_port_col] if dst_port_col else 0,
-        )
-        src_indices.append(node2idx[src_key])
-        dst_indices.append(node2idx[dst_key])
-
+    src_indices = [node2idx[k] for k in src_keys]
+    dst_indices = [node2idx[k] for k in dst_keys]
     edge_index = torch.tensor([src_indices, dst_indices], dtype=torch.long)
 
-    # Edge attributes (normalised feature columns)
+    # Edge attributes: clip to ±clip_sigma bounds, then z-score normalise
     edge_attr_raw = df_window[feature_cols].fillna(0.0).values.astype(np.float32)
     if scaler is not None:
+        # Apply clipping bounds stored by build_static_graphs before transforming.
+        # scaler.clip_lo_ / clip_hi_ are set in build_static_graphs and serialized
+        # to scaler.pkl so that attack modules can perform the same operation.
+        if hasattr(scaler, "clip_lo_"):
+            edge_attr_raw = np.clip(edge_attr_raw, scaler.clip_lo_, scaler.clip_hi_)
         edge_attr_raw = scaler.transform(edge_attr_raw).astype(np.float32)
     edge_attr = torch.from_numpy(edge_attr_raw)
 
@@ -278,7 +300,7 @@ def build_static_graphs(
                 feature_cols,
                 node2idx,
                 label2idx,
-                scaler=scaler if split_name == "train" else scaler,
+                scaler=scaler,
             )
             torch.save(graph, output_dir / split_name / f"{graph_idx:05d}.pt")
             graph_idx += 1

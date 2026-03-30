@@ -73,21 +73,21 @@ _FEAT_IDX: dict[str, int] = {name: i for i, name in enumerate(NF_FEATURES)}
 # ── TCP Flag Validity ──────────────────────────────────────────────────────────
 # 6-bit bitmask: bit5=URG  bit4=ACK  bit3=PSH  bit2=RST  bit1=SYN  bit0=FIN
 
-_TCP_FIN: int = 0x01
-_TCP_SYN: int = 0x02
-_TCP_RST: int = 0x04
-_TCP_PSH: int = 0x08
-_TCP_ACK: int = 0x10
-_TCP_URG: int = 0x20
-_TCP_MAX: int = 0x3F
+TCP_FIN: int = 0x01
+TCP_SYN: int = 0x02
+TCP_RST: int = 0x04
+TCP_PSH: int = 0x08
+TCP_ACK: int = 0x10
+TCP_URG: int = 0x20
+TCP_MAX: int = 0x3F
 
 # RFC 793 + common security heuristics — these combinations are invalid
 _INVALID_TCP_COMBOS: frozenset[int] = frozenset({
     0x00,                               # NULL: no flags set
-    _TCP_SYN | _TCP_FIN,               # 0x03 — contradictory state signals
-    _TCP_SYN | _TCP_RST,               # 0x06 — contradictory
-    _TCP_SYN | _TCP_FIN | _TCP_RST,    # 0x07
-    _TCP_MAX,                           # 0x3F — XMAS scan
+    TCP_SYN | TCP_FIN,                 # 0x03 — contradictory state signals
+    TCP_SYN | TCP_RST,                 # 0x06 — contradictory
+    TCP_SYN | TCP_FIN | TCP_RST,       # 0x07
+    TCP_MAX,                            # 0x3F — XMAS scan
 })
 
 _TCP_FLAG_COLS: tuple[str, ...] = (
@@ -99,7 +99,7 @@ _TCP_FLAG_COLS: tuple[str, ...] = (
 _EPS: float = 1e-6  # guard against division by zero
 
 
-def _is_valid_tcp_flags(flags: int) -> bool:
+def is_valid_tcp_flags(flags: int) -> bool:
     """Return True if the TCP bitmask is a protocol-valid combination.
 
     Args:
@@ -108,11 +108,11 @@ def _is_valid_tcp_flags(flags: int) -> bool:
     Returns:
         True if flags are valid per RFC 793 heuristics.
     """
-    flags = int(flags) & _TCP_MAX
+    flags = int(flags) & TCP_MAX
     return flags not in _INVALID_TCP_COMBOS
 
 
-def _nearest_valid_tcp_flags(flags: int) -> int:
+def nearest_valid_tcp_flags(flags: int) -> int:
     """Project an invalid TCP flag value to the nearest valid one.
 
     Strategy: remove bits in priority order (FIN first, then SYN) until the
@@ -125,14 +125,14 @@ def _nearest_valid_tcp_flags(flags: int) -> int:
     Returns:
         A valid TCP flags integer.
     """
-    flags = int(flags) & _TCP_MAX
+    flags = int(flags) & TCP_MAX
     if flags not in _INVALID_TCP_COMBOS:
         return flags
-    for bit in (_TCP_FIN, _TCP_SYN, _TCP_RST, _TCP_URG):
+    for bit in (TCP_FIN, TCP_SYN, TCP_RST, TCP_URG):
         candidate = flags & ~bit
         if candidate not in _INVALID_TCP_COMBOS:
             return candidate
-    return _TCP_ACK  # safe fallback
+    return TCP_ACK  # safe fallback
 
 
 # ── Feature Co-Dependency Rules ────────────────────────────────────────────────
@@ -359,8 +359,20 @@ class ConstraintSet:
         with open(scaler_path, "rb") as f:
             scaler = pickle.load(f)
 
+        n_scaler = len(scaler.mean_)
+        n_names = len(feature_names)
+        if n_scaler != n_names:
+            raise ValueError(
+                f"Scaler was fitted on {n_scaler} features but feature_names "
+                f"contains {n_names} entries. Rebuild the scaler or pass the "
+                f"correct feature_names list."
+            )
+
         bounds: dict[str, tuple[float, float]] = {}
         for name, mean, std in zip(feature_names, scaler.mean_, scaler.scale_):
+            # Lower bound floored at 0 for features with natural non-negative range
+            # (byte/packet counts, ports, durations). Features that can legitimately
+            # be negative (e.g. deltas) would need a per-feature allow-list here.
             lo = max(0.0, float(mean) - 3.0 * float(std))
             hi = float(mean) + 3.0 * float(std)
             bounds[name] = (lo, hi)
@@ -418,8 +430,8 @@ class ConstraintSet:
     def _fix_tcp_flags(self, x: np.ndarray) -> np.ndarray:
         for col in self.tcp_flag_cols:
             idx = self._feat_idx[col]
-            flags = int(round(float(x[idx]))) & _TCP_MAX
-            x[idx] = float(_nearest_valid_tcp_flags(flags))
+            flags = int(round(float(x[idx]))) & TCP_MAX
+            x[idx] = float(nearest_valid_tcp_flags(flags))
         return x
 
     def _fix_semantic(self, x: np.ndarray, attack_label: int) -> np.ndarray:
@@ -477,8 +489,8 @@ class ConstraintSet:
 
     def _check_tcp_flags(self, x: np.ndarray) -> bool:
         for col in self.tcp_flag_cols:
-            flags = int(round(float(x[self._feat_idx[col]]))) & _TCP_MAX
-            if not _is_valid_tcp_flags(flags):
+            flags = int(round(float(x[self._feat_idx[col]]))) & TCP_MAX
+            if not is_valid_tcp_flags(flags):
                 return False
         return True
 
@@ -525,12 +537,14 @@ class ConstraintSet:
         original_degrees: np.ndarray,
         new_degrees: np.ndarray,
         sigma_multiplier: float = 3.0,
+        train_mean: float | None = None,
+        train_std: float | None = None,
     ) -> bool:
         """Check that injected edges do not create anomalous node degrees.
 
         Used exclusively by ``EdgeInjectionAttack``. Node degrees after
         injection must remain within ``sigma_multiplier`` standard deviations
-        of the training degree distribution.
+        of the **training** degree distribution.
 
         Args:
             original_degrees: Degree array of all nodes before injection
@@ -538,11 +552,20 @@ class ConstraintSet:
             new_degrees: Degree array of all nodes after injection.
             sigma_multiplier: Number of standard deviations allowed above
                 the training mean (default: 3.0 per spec).
+            train_mean: Pre-computed mean of the training degree distribution.
+                If ``None``, falls back to ``mean(original_degrees)`` — only
+                valid when called on a clean (unattacked) graph.  Callers
+                should compute and cache these stats from the training split
+                once and pass them here to prevent threshold drift.
+            train_std: Pre-computed std of the training degree distribution.
+                Same semantics as ``train_mean``.
 
         Returns:
             True if no node's new degree exceeds the threshold.
         """
-        mean = float(np.mean(original_degrees))
-        std = float(np.std(original_degrees))
+        mean = train_mean if train_mean is not None else float(np.mean(original_degrees))
+        std = train_std if train_std is not None else float(np.std(original_degrees))
+        if std == 0.0:
+            std = 1.0  # avoid threshold == mean when all degrees are identical
         threshold = mean + sigma_multiplier * std
         return bool(np.all(new_degrees <= threshold))

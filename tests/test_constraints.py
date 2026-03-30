@@ -11,16 +11,15 @@ import numpy as np
 import pytest
 
 from src.attack.constraints import (
-    _EPS,
-    _TCP_ACK,
-    _TCP_FIN,
-    _TCP_MAX,
-    _TCP_PSH,
-    _TCP_RST,
-    _TCP_SYN,
-    _TCP_URG,
-    _is_valid_tcp_flags,
-    _nearest_valid_tcp_flags,
+    TCP_ACK,
+    TCP_FIN,
+    TCP_MAX,
+    TCP_PSH,
+    TCP_RST,
+    TCP_SYN,
+    TCP_URG,
+    is_valid_tcp_flags,
+    nearest_valid_tcp_flags,
     CoDependencyRule,
     ConstraintSet,
     NF_FEATURES,
@@ -28,99 +27,68 @@ from src.attack.constraints import (
 )
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
+# basic_cs and sample_flow are defined in conftest.py (shared with future attack tests).
 
 @pytest.fixture
 def feat_idx() -> dict[str, int]:
     return {name: i for i, name in enumerate(NF_FEATURES)}
 
 
-@pytest.fixture
-def basic_cs() -> ConstraintSet:
-    """ConstraintSet with wide bounds (effectively unconstrained on bounds)."""
-    bounds = {name: (0.0, 1e9) for name in NF_FEATURES}
-    return ConstraintSet(bounds=bounds)
-
-
-@pytest.fixture
-def sample_flow() -> np.ndarray:
-    """A physically plausible raw-scale NetFlow feature vector."""
-    x = np.zeros(len(NF_FEATURES), dtype=np.float64)
-    fi = {name: i for i, name in enumerate(NF_FEATURES)}
-
-    x[fi["IN_BYTES"]]                   = 2000.0
-    x[fi["OUT_BYTES"]]                  = 800.0
-    x[fi["IN_PKTS"]]                    = 20.0
-    x[fi["OUT_PKTS"]]                   = 10.0
-    x[fi["FLOW_DURATION_MILLISECONDS"]] = 4000.0   # 4 seconds
-    x[fi["TCP_FLAGS"]]                  = float(_TCP_ACK)
-    x[fi["CLIENT_TCP_FLAGS"]]           = float(_TCP_PSH | _TCP_ACK)
-    x[fi["SERVER_TCP_FLAGS"]]           = float(_TCP_ACK)
-
-    # Derived features must be consistent with sources
-    flow_s = x[fi["FLOW_DURATION_MILLISECONDS"]] / 1000.0
-    x[fi["SRC_TO_DST_SECOND_BYTES"]]   = x[fi["IN_BYTES"]]  / flow_s
-    x[fi["DST_TO_SRC_SECOND_BYTES"]]   = x[fi["OUT_BYTES"]] / flow_s
-    x[fi["SRC_TO_DST_AVG_THROUGHPUT"]] = x[fi["IN_BYTES"]]  * 8.0 / flow_s
-    x[fi["DST_TO_SRC_AVG_THROUGHPUT"]] = x[fi["OUT_BYTES"]] * 8.0 / flow_s
-
-    return x
-
-
 # ── TCP Flag Helpers ───────────────────────────────────────────────────────────
 
 class TestTCPFlagValidity:
     def test_ack_is_valid(self):
-        assert _is_valid_tcp_flags(_TCP_ACK) is True
+        assert is_valid_tcp_flags(TCP_ACK) is True
 
     def test_syn_is_valid(self):
-        assert _is_valid_tcp_flags(_TCP_SYN) is True
+        assert is_valid_tcp_flags(TCP_SYN) is True
 
     def test_syn_ack_is_valid(self):
-        assert _is_valid_tcp_flags(_TCP_SYN | _TCP_ACK) is True
+        assert is_valid_tcp_flags(TCP_SYN | TCP_ACK) is True
 
     def test_psh_ack_is_valid(self):
-        assert _is_valid_tcp_flags(_TCP_PSH | _TCP_ACK) is True
+        assert is_valid_tcp_flags(TCP_PSH | TCP_ACK) is True
 
     def test_fin_ack_is_valid(self):
-        assert _is_valid_tcp_flags(_TCP_FIN | _TCP_ACK) is True
+        assert is_valid_tcp_flags(TCP_FIN | TCP_ACK) is True
 
     def test_null_is_invalid(self):
-        assert _is_valid_tcp_flags(0x00) is False
+        assert is_valid_tcp_flags(0x00) is False
 
     def test_syn_fin_is_invalid(self):
-        assert _is_valid_tcp_flags(_TCP_SYN | _TCP_FIN) is False
+        assert is_valid_tcp_flags(TCP_SYN | TCP_FIN) is False
 
     def test_syn_rst_is_invalid(self):
-        assert _is_valid_tcp_flags(_TCP_SYN | _TCP_RST) is False
+        assert is_valid_tcp_flags(TCP_SYN | TCP_RST) is False
 
     def test_xmas_is_invalid(self):
-        assert _is_valid_tcp_flags(_TCP_MAX) is False
+        assert is_valid_tcp_flags(TCP_MAX) is False
 
     def test_out_of_range_masked(self):
         # Values > 63 are masked to 6 bits before checking
-        assert _is_valid_tcp_flags(0x100 | _TCP_ACK) is True  # masked → plain ACK
+        assert is_valid_tcp_flags(0x100 | TCP_ACK) is True  # masked → plain ACK
 
 
 class TestNearestValidTCPFlags:
     def test_valid_input_unchanged(self):
-        assert _nearest_valid_tcp_flags(_TCP_ACK) == _TCP_ACK
+        assert nearest_valid_tcp_flags(TCP_ACK) == TCP_ACK
 
     def test_syn_fin_projected(self):
-        result = _nearest_valid_tcp_flags(_TCP_SYN | _TCP_FIN)
-        assert _is_valid_tcp_flags(result), f"Projected value {result} is still invalid"
+        result = nearest_valid_tcp_flags(TCP_SYN | TCP_FIN)
+        assert is_valid_tcp_flags(result), f"Projected value {result} is still invalid"
 
     def test_null_projected(self):
-        result = _nearest_valid_tcp_flags(0x00)
-        assert _is_valid_tcp_flags(result)
+        result = nearest_valid_tcp_flags(0x00)
+        assert is_valid_tcp_flags(result)
 
     def test_xmas_projected(self):
-        result = _nearest_valid_tcp_flags(_TCP_MAX)
-        assert _is_valid_tcp_flags(result)
+        result = nearest_valid_tcp_flags(TCP_MAX)
+        assert is_valid_tcp_flags(result)
 
     def test_result_in_range(self):
-        for flags in range(_TCP_MAX + 1):
-            result = _nearest_valid_tcp_flags(flags)
-            assert 0 <= result <= _TCP_MAX
+        for flags in range(TCP_MAX + 1):
+            result = nearest_valid_tcp_flags(flags)
+            assert 0 <= result <= TCP_MAX
 
 
 # ── CoDependencyRule ───────────────────────────────────────────────────────────
@@ -130,7 +98,7 @@ class TestCoDependencyRule:
         rule = CoDependencyRule(
             derived="SRC_TO_DST_SECOND_BYTES",
             sources=("IN_BYTES", "FLOW_DURATION_MILLISECONDS"),
-            compute=lambda v: v[0] / max(v[1] / 1000.0, _EPS),
+            compute=lambda v: v[0] / max(v[1] / 1000.0, 1e-6),
         )
         x = sample_flow.copy()
         x[feat_idx["SRC_TO_DST_SECOND_BYTES"]] = 99999.0   # corrupt
@@ -145,7 +113,7 @@ class TestCoDependencyRule:
         rule = CoDependencyRule(
             derived="SRC_TO_DST_SECOND_BYTES",
             sources=("IN_BYTES", "FLOW_DURATION_MILLISECONDS"),
-            compute=lambda v: v[0] / max(v[1] / 1000.0, _EPS),
+            compute=lambda v: v[0] / max(v[1] / 1000.0, 1e-6),
         )
         assert rule.residual(sample_flow, feat_idx) < 1e-6
 
@@ -153,7 +121,7 @@ class TestCoDependencyRule:
         rule = CoDependencyRule(
             derived="SRC_TO_DST_SECOND_BYTES",
             sources=("IN_BYTES", "FLOW_DURATION_MILLISECONDS"),
-            compute=lambda v: v[0] / max(v[1] / 1000.0, _EPS),
+            compute=lambda v: v[0] / max(v[1] / 1000.0, 1e-6),
         )
         x = sample_flow.copy()
         x[feat_idx["SRC_TO_DST_SECOND_BYTES"]] = 0.0
@@ -196,13 +164,13 @@ class TestConstraintSetProject:
     def test_project_fixes_tcp_flags(self, basic_cs):
         x = np.zeros(len(NF_FEATURES))
         fi = {n: i for i, n in enumerate(NF_FEATURES)}
-        x[fi["TCP_FLAGS"]]         = float(_TCP_SYN | _TCP_FIN)   # invalid
-        x[fi["CLIENT_TCP_FLAGS"]]  = float(_TCP_PSH | _TCP_ACK)   # valid
+        x[fi["TCP_FLAGS"]]         = float(TCP_SYN | TCP_FIN)   # invalid
+        x[fi["CLIENT_TCP_FLAGS"]]  = float(TCP_PSH | TCP_ACK)   # valid
         x[fi["SERVER_TCP_FLAGS"]]  = float(0x00)                   # invalid
 
         proj = basic_cs.project(x)
-        assert _is_valid_tcp_flags(int(proj[fi["TCP_FLAGS"]]))
-        assert _is_valid_tcp_flags(int(proj[fi["SERVER_TCP_FLAGS"]]))
+        assert is_valid_tcp_flags(int(proj[fi["TCP_FLAGS"]]))
+        assert is_valid_tcp_flags(int(proj[fi["SERVER_TCP_FLAGS"]]))
 
     def test_project_recomputes_co_dependencies(self, basic_cs, sample_flow):
         fi = {n: i for i, n in enumerate(NF_FEATURES)}
@@ -237,7 +205,7 @@ class TestConstraintSetCheck:
     def test_check_fails_invalid_tcp(self, basic_cs, sample_flow):
         fi = {n: i for i, n in enumerate(NF_FEATURES)}
         x = sample_flow.copy()
-        x[fi["TCP_FLAGS"]] = float(_TCP_SYN | _TCP_FIN)
+        x[fi["TCP_FLAGS"]] = float(TCP_SYN | TCP_FIN)
         assert basic_cs.check(x) is False
 
     def test_check_fails_inconsistent_derived(self, basic_cs, sample_flow):
@@ -251,9 +219,9 @@ class TestConstraintSetCheck:
         cs = ConstraintSet(bounds=bounds, co_dep_rules=[], semantic_constraints=[])
         fi = {n: i for i, n in enumerate(NF_FEATURES)}
         x = np.zeros(len(NF_FEATURES))
-        x[fi["TCP_FLAGS"]] = float(_TCP_ACK)
-        x[fi["CLIENT_TCP_FLAGS"]] = float(_TCP_ACK)
-        x[fi["SERVER_TCP_FLAGS"]] = float(_TCP_ACK)
+        x[fi["TCP_FLAGS"]] = float(TCP_ACK)
+        x[fi["CLIENT_TCP_FLAGS"]] = float(TCP_ACK)
+        x[fi["SERVER_TCP_FLAGS"]] = float(TCP_ACK)
         x[fi["IN_BYTES"]] = 9999.0   # exceeds bound
         assert cs.check(x) is False
 
@@ -269,7 +237,7 @@ class TestConstraintSetCSR:
         valid = basic_cs.project(sample_flow)
 
         invalid = sample_flow.copy()
-        invalid[fi["TCP_FLAGS"]] = float(_TCP_SYN | _TCP_FIN)
+        invalid[fi["TCP_FLAGS"]] = float(TCP_SYN | TCP_FIN)
 
         # 7 valid, 3 invalid
         batch = np.stack([valid] * 7 + [invalid] * 3)
