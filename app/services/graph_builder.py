@@ -100,6 +100,14 @@ def build_graph_response(
                 if nid not in nodes:
                     nodes[nid] = {"data": {"id": nid, "ip": nid, "riskScore": 0.0, "x": 0.0, "y": 0.0}}
 
+            # Store raw (normalised) edge features so the adversarial module
+            # can retrieve them without re-running the data pipeline.
+            raw_feats = (
+                data.edge_attr[edge_pos].tolist()
+                if data.edge_attr is not None
+                else []
+            )
+
             edges.append({
                 "data": {
                     "id": edge_id,
@@ -111,6 +119,7 @@ def build_graph_response(
                     "colour": _class_colour(pred_class),
                     "width": max(1, int(conf * 4)),
                     "window": window_idx,
+                    "raw_features": raw_feats,
                 }
             })
 

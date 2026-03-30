@@ -5,6 +5,9 @@ raw_path:       ${paths.data_raw}/NF-UNSW-NB15-v2.csv
 processed_dir:  ${paths.data_processed}/static
 scaler_path:    ${paths.data_processed}/static/scaler.pkl
 
+# Column in the CSV that holds the multiclass attack label
+label_col: attack_cat
+
 # Tumbling window size in seconds
 window_size_s: 60
 

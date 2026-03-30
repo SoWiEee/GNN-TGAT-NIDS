@@ -349,6 +349,7 @@ def main(cfg: DictConfig) -> None:
         window_size_s=cfg.window_size_s,
         ratios=tuple(cfg.splits),
         clip_sigma=cfg.normalization.clip_sigma,
+        label_col=cfg.get("label_col", None),
     )
 
     print(f"Built {sum(meta['split_counts'].values())} total windows.")

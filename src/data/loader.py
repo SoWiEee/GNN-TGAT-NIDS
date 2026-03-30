@@ -105,9 +105,9 @@ def encode_labels(df: pd.DataFrame) -> tuple[pd.Series, dict[str, int]]:
 
     unique_labels = df["_label"].unique().tolist()
 
-    # Identify benign class (case-insensitive)
+    # Identify benign class — accept "Benign"/"BENIGN" or "Normal"/"NORMAL"
     benign_raw = next(
-        (lbl for lbl in unique_labels if lbl.lower() == "benign"),
+        (lbl for lbl in unique_labels if lbl.lower() in ("benign", "normal")),
         None,
     )
 
@@ -206,7 +206,7 @@ def get_feature_columns(df: pd.DataFrame, exclude: list[str] | None = None) -> l
     list[str]
         Sorted list of numeric feature column names.
     """
-    always_exclude = {"_ts", "_label"}
+    always_exclude = {"_ts", "_label", "_encoded"}
     if exclude:
         always_exclude.update(exclude)
 

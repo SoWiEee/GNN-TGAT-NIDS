@@ -128,7 +128,7 @@ def main(cfg: DictConfig) -> None:
     log.info("device=%s", device)
 
     # ── Data ─────────────────────────────────────────────────────────────────
-    dataset_type = cfg.data.get("dataset", "static")
+    dataset_type = cfg.data.get("graph_type", "static")
     if dataset_type == "static":
         train_loader, val_loader, test_loader, n_classes, n_edge_feat = (
             _build_static_loaders(cfg)
@@ -204,7 +204,12 @@ def main(cfg: DictConfig) -> None:
                 str(ckpt_dir / "best.pt"),
                 extra={"val_metrics": val_metrics},
             )
-            log.info("New best val_f1=%.4f saved.", best_val_f1)
+            # Also save a complete model object for the web inference service.
+            # This file is loaded by app/services/inference.py at startup.
+            inference_path = ckpt_dir.parent / f"{Path(ckpt_dir).name}_best.pt"
+            torch.save(model.cpu(), inference_path)
+            model.to(device)
+            log.info("New best val_f1=%.4f saved → inference: %s", best_val_f1, inference_path)
 
     # ── Final test evaluation ────────────────────────────────────────────────
     log.info("Loading best checkpoint for final test evaluation …")
