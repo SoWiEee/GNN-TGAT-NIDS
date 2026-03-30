@@ -1,4 +1,4 @@
-# GNN-NIDS Analyzer
+# GNN-TGAT-NIDS
 
 **Upload NetFlow traffic → Detect intrusions with GNN → Visualize, alert, and report**
 
@@ -66,8 +66,8 @@ flowchart LR
 ### 1. Backend
 
 ```bash
-git clone https://github.com/SoWiEee/GNN-NIDS-Analyzer.git
-cd GNN-NIDS-Analyzer
+git clone https://github.com/SoWiEee/GNN-TGAT-NIDS.git
+cd GNN-TGAT-NIDS
 
 # Install Python dependencies
 uv sync
