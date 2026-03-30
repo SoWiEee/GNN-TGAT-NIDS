@@ -14,13 +14,13 @@
     "cytoscape": "^3.29.0",
     "pinia": "^2.2.0",
     "plotly.js-basic-dist-min": "^2.35.0",
+    "@vitejs/plugin-vue": "^6.0.5",
     "vue": "^3.5.0",
     "vue-router": "^4.4.0"
   },
   "devDependencies": {
     "@types/cytoscape": "^3.21.0",
     "@types/plotly.js-basic-dist-min": "^2.12.0",
-    "@vitejs/plugin-vue": "^5.1.0",
     "typescript": "~5.5.0",
     "vite": "^8.0.3",
     "vue-tsc": "^2.1.0"
