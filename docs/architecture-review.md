@@ -1,22 +1,21 @@
-# Architecture Review: GARF-NIDS v0.2
+# Architecture Review: GNN-NIDS Analyzer v1.0
 
-> 從軟體工程（SE）、機器學習（ML）與學術投稿（AC）三個角度，對新研究方向進行系統性審核。
-> 目標投稿：NDSS 2027 / USENIX Security 2027。
-> 每個問題均標示嚴重程度（🔴 Critical / 🟡 Major / 🟢 Minor）及面向（SE / ML / AC）。
+> 以 AI/Web 工程師的角度，針對實用工具方向的架構與效能進行系統性審核。
+> 涵蓋 Backend（FastAPI）、Frontend（Vue 3 + Vite）、API 設計、Session 管理、安全性與可部署性。
 
-**審核版本：** 0.2 | **參照規格：** `docs/spec.md` v0.3.0 | **日期：** 2026-03
+**審核版本：** 1.0 | **參照規格：** `docs/spec.md` v1.0.0 | **日期：** 2026-03
 
 ---
 
 ## Table of Contents
 
 1. [Executive Summary](#1-executive-summary)
-2. [研究方向升級後的新問題](#2-研究方向升級後的新問題)
-3. [Memory Poisoning Attack 架構](#3-memory-poisoning-attack-架構)
-4. [Timing-Aware Edge Injection 架構](#4-timing-aware-edge-injection-架構)
-5. [評估協定完整性](#5-評估協定完整性)
-6. [投稿可行性審核](#6-投稿可行性審核)
-7. [保留問題（v0.1 仍未解決）](#7-保留問題v01-仍未解決)
+2. [Backend：非同步與並發](#2-backend非同步與並發)
+3. [Frontend：效能與 Bundle 大小](#3-frontend效能與-bundle-大小)
+4. [API 設計](#4-api-設計)
+5. [Session 與檔案管理](#5-session-與檔案管理)
+6. [安全性](#6-安全性)
+7. [可部署性](#7-可部署性)
 8. [Risk Summary Table](#8-risk-summary-table)
 9. [Recommended Action Items](#9-recommended-action-items)
 
@@ -24,272 +23,433 @@
 
 ## 1. Executive Summary
 
-研究方向從「靜態 vs 時序 GNN 魯棒性比較」升級為「時序 GNN 記憶機制的可利用性發現」，大幅提升了論文的差異化程度與投稿競爭力。以下是主要問題摘要：
+整體架構方向正確：FastAPI + Vue 3 是成熟的組合，PyG → Cytoscape.js 的資料流清晰。但有幾個
+「放到 request path 上的重運算」問題，若不處理，會在 demo 時直接卡住瀏覽器。以下是主要問題摘要：
 
 | 優先級 | 問題 | 面向 |
 |--------|------|------|
-| 🔴 | Memory Poisoning 攻擊的「記憶體歸因」未定義：無法區分哪些節點被污染、污染程度為何 | ML |
-| 🔴 | TAEI 的 timing 優化目標函數需要多次模型前向傳播，對 TGN 來說計算成本極高（coarse 搜尋 K×n 次推論） | SE |
-| 🔴 | 論文核心主張（「時序 GNN 更脆弱」）需要統計顯著性支撐；目前評估設計缺少 bootstrap CI 或 permutation test | AC |
-| 🟡 | MPA 的「注入邊特徵應在良性分佈內」與 TAEI 共享 edge feature generator，但兩者需求不同（MPA 追求記憶體偏移，TAEI 追求分類邊界穿越） | ML |
-| 🟡 | Memory Half-Life 定義（DR 恢復至 90%）對部分攻擊可能永遠達不到，缺少 timeout/censored 處理 | ML |
-| 🟡 | `memory_poisoning.py` 模組需要直接存取 TGN/TGAT 的內部記憶體狀態，而 `BaseNIDSModel` 介面目前不暴露此功能 | SE |
-| 🟡 | 投稿安全頂會（NDSS/USENIX）需要 artifact 評估（可重現性），Docker 容器化尚未規劃 | AC |
-| 🟢 | `configs/attack/mpa.yaml` 的 `target_nodes: auto` 未定義選取策略（degree top 10%？或 betweenness centrality？） | ML |
-| 🟢 | 缺少 ablation study 規劃：需分離 timing 效果 vs constraint 效果 vs memory 容量效果 | AC |
+| 🔴 | GNN 推論（10–30 秒）在 `POST /analyze` 同步執行，會阻塞 uvicorn event loop | BE |
+| 🔴 | C-PGD 40 步反向傳播（每次 1–5 秒）在 `POST /adversarial` 同步執行，瀏覽器會 timeout | BE |
+| 🔴 | PDF 產生（WeasyPrint）是 CPU-heavy，若同步執行同樣阻塞 event loop | BE |
+| 🟡 | 兩個模型（GraphSAGE / GAT）在 startup 只載入一個，但 API 讓使用者選擇模型 | BE |
+| 🟡 | Cytoscape.js 500 nodes / 2 000 edges 初始渲染，低階電腦會卡頓 | FE |
+| 🟡 | Plotly.js 完整 bundle ~3 MB，拖慢首次載入 | FE |
+| 🟡 | Session 1 小時清除機制規格存在，但沒有定義實作方式（cron？background task？） | BE |
+| 🟡 | `pickle` 序列化 scaler 有安全疑慮；路徑未驗證的 `session_id` 有路徑穿越風險 | SEC |
+| 🟢 | PDF 報告中「Cytoscape.js graph PNG」要用 Selenium headless 產生，過重 | BE |
+| 🟢 | 前端輪詢 `/status` 的 abort 邏輯與輪詢間隔未定義 | FE |
+| 🟢 | `reliability.json` 同時被當成靜態資源和 API endpoint，職責重複 | BE |
 
 ---
 
-## 2. 研究方向升級後的新問題
+## 2. Backend：非同步與並發
 
-### 2.1 論文核心主張需要統計顯著性支撐 🔴 AC
+### 2.1 GNN 推論阻塞 Event Loop 🔴 BE
 
-**問題：** 論文主張「時序 GNN 在 TAEI/MPA 下更脆弱」是一個跨模型的定量比較聲明。若只報告單次實驗結果，審稿人會要求：
+**問題：** FastAPI 使用 async I/O，但 PyTorch GNN 推論是同步的 CPU/GPU 運算。若直接在 `async def` 路由裡呼叫 `model(data)`，會佔用 event loop 執行緒，導致伺服器在推論期間無法回應其他請求（包含輪詢的 `/status`）。
 
-1. 不同隨機種子（seeds）下的結果穩定性
-2. 統計顯著性檢定（t-test 或 bootstrap confidence interval）
-3. 多個 epsilon/n_inject 值下的一致性
-
-**建議修正：**
-
-在 `configs/eval/full_matrix.yaml` 中加入 multi-seed 設計：
-
-```yaml
-# configs/eval/full_matrix.yaml
-seeds: [42, 123, 456, 789, 1024]   # 5 seeds for statistical significance
-bootstrap_ci: true                  # 計算 95% CI
-```
-
-在 `eval/metrics.py` 中新增：
+**建議修正：** 用 `asyncio.get_event_loop().run_in_executor(None, ...)` 或 `fastapi.concurrency.run_in_threadpool` 把同步 GNN 推論移至執行緒池：
 
 ```python
-def bootstrap_confidence_interval(
-    scores: list[float], n_boot: int = 1000, ci: float = 0.95
-) -> tuple[float, float]:
-    """Return (lower, upper) bootstrap CI for a list of metric values."""
+# app/services/inference.py
+from fastapi.concurrency import run_in_threadpool
+
+async def run_inference(session_id: str, model_name: str) -> InferenceResult:
+    result = await run_in_threadpool(_sync_run_inference, session_id, model_name)
+    return result
+
+def _sync_run_inference(session_id: str, model_name: str) -> InferenceResult:
+    # 所有 PyTorch 操作在這裡同步執行
+    data = load_session_data(session_id)
+    model = get_model(model_name)
+    with torch.inference_mode():
+        logits = model(data)
+    return build_inference_result(logits, data)
 ```
 
-### 2.2 Threat Model 需要形式化，以符合頂會標準 🟡 AC
+對於更長的分析任務（大型 CSV），可進一步考慮 FastAPI 的 `BackgroundTasks`：client 收到 `202 Accepted` 後輪詢 `/status`。
 
-**問題：** NDSS / USENIX Security 審稿人對 threat model 的要求非常嚴格，現有 spec 的 threat model 過於簡略。
+### 2.2 C-PGD 阻塞 Request 🔴 BE
 
-**建議補充的 Threat Model 表格（加入 spec.md Section 3.3.1）：**
+**問題：** `POST /adversarial` 執行 C-PGD（40 steps of gradient computation），單一 flow 約需 1–5 秒。若同步執行且多用戶並發，或 demo 時連點多次「Generate adversarial」，伺服器會排隊堵死。
 
-| 面向 | 說明 |
-|------|------|
-| **Attacker goal** | Cause temporal NIDS to misclassify attack traffic as benign（evasion，非 poisoning-to-destroy-model） |
-| **Attacker knowledge** | White-box（完整模型權重）for C-PGD；Black-box（query-based）for GAN；Network topology（部分）for TAEI/MPA |
-| **Attacker capability** | 可注入或修改少量流量，但不能控制路由器或網路基礎設施 |
-| **Attack timing** | 攻擊者在真實攻擊發動前最多 H 秒可執行 MPA；TAEI 注入必須在目標攻擊流量前 |
-| **Defender** | NIDS 以固定模型參數執行推論，不做線上更新 |
-
-### 2.3 MPA 與 TAEI 的評估不可交叉污染 🟡 ML
-
-**問題：** 若同一個模型在評估 TAEI 後繼續評估 MPA，記憶體狀態會受前一個攻擊影響。
-
-**建議：** 在 `eval/comparison.py` 中強制執行獨立評估隔離：
+**建議修正：** 同 2.1，用 `run_in_threadpool` 包裝。另外加上 **timeout 保護**：
 
 ```python
-# eval/comparison.py
-for attack_cfg in cfg.attacks:
-    # 每個攻擊前重新載入 clean model checkpoint
-    model = instantiate(cfg.model)
-    load_checkpoint(model, optimizer=None, path=cfg.checkpoint_dir / "best.pt")
-    # 執行 memory_reset_policy
-    if hasattr(model, 'reset_memory'):
-        model.reset_memory()
-    results[attack_cfg.name] = run_attack(model, attack_cfg, test_data)
+# app/routers/adversarial.py
+import asyncio
+
+async def generate_adversarial(req: AdversarialRequest):
+    try:
+        result = await asyncio.wait_for(
+            run_in_threadpool(_sync_cpgd, req),
+            timeout=30.0  # 30 秒上限；C-PGD 找不到對抗例就回傳 null
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(408, detail="Adversarial generation timed out")
+    return result
+```
+
+### 2.3 PDF 產生阻塞 Event Loop 🔴 BE
+
+**問題：** WeasyPrint 把 HTML 渲染成 PDF 屬於 CPU-heavy 操作（涉及字型解析、排版計算），通常需要 1–3 秒。直接在 async 路由呼叫會阻塞 event loop。
+
+**建議修正：** 同樣用 `run_in_threadpool`；若 PDF 產生需要嵌入圖表，先讓前端 export canvas PNG（見 Section 3.3），再由後端嵌入，可避免 Selenium 依賴。
+
+### 2.4 兩個模型的載入策略 🟡 BE
+
+**問題：** spec 說「load checkpoint once at startup」，但 `POST /analyze` 讓使用者選擇 `graphsage` 或 `gat`。只載入一個模型則另一個無法使用；兩個都載入則佔記憶體（各約 50–200 MB）。
+
+**建議：** 啟動時兩個都載入，存進字典：
+
+```python
+# app/services/inference.py
+_models: dict[str, BaseNIDSModel] = {}
+
+def load_models():
+    _models["graphsage"] = load_checkpoint_to_model("checkpoints/graphsage_best.pt")
+    _models["gat"]       = load_checkpoint_to_model("checkpoints/gat_best.pt")
+
+def get_model(name: str) -> BaseNIDSModel:
+    if name not in _models:
+        raise ValueError(f"Unknown model: {name}")
+    return _models[name]
+```
+
+兩個 GraphSAGE/GAT checkpoint 合計約 100–400 MB，現代筆電完全可接受。
+
+### 2.5 Session 清除機制未定義 🟡 BE
+
+**問題：** 規格說「1-hour cleanup」但沒有說怎麼實作。若沒有清除，`data/sessions/` 會無限增長。
+
+**建議：** 用 FastAPI 的 `BackgroundTasks` 加上時間戳記檔案，或在 lifespan 中啟動一個清除協程：
+
+```python
+# app/main.py
+import asyncio
+from pathlib import Path
+import time
+
+async def cleanup_sessions(sessions_dir: Path, ttl_seconds: int = 3600):
+    while True:
+        await asyncio.sleep(300)  # 每 5 分鐘檢查一次
+        now = time.time()
+        for session_dir in sessions_dir.iterdir():
+            if session_dir.is_dir():
+                mtime = session_dir.stat().st_mtime
+                if now - mtime > ttl_seconds:
+                    shutil.rmtree(session_dir, ignore_errors=True)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    load_models()
+    task = asyncio.create_task(cleanup_sessions(Path("data/sessions")))
+    yield
+    task.cancel()
+```
+
+### 2.6 Graph PNG for PDF：Selenium 過重 🟢 BE
+
+**問題：** spec 提到「static PNG export of Cytoscape.js graph generated server-side with `cytoscape-png` or Selenium headless」。Selenium headless 需要安裝 Chrome + WebDriver，在 CI / 部署環境非常不友善。
+
+**替代方案：** 讓前端在 export 前用 Cytoscape.js 的 `.png()` 方法產生 base64 PNG，連同 `POST /report` 一起上傳。後端直接嵌入 base64 圖片到 Jinja2 template，完全不需要 Selenium：
+
+```typescript
+// AdversarialReport.vue or TrafficGraph.vue
+async function exportReport() {
+  const graphPng = cy.png({ output: 'base64', scale: 2 })
+  await api.generateReport(sessionId, { graphPng })
+}
+```
+
+```python
+# app/services/report_builder.py
+# template 中直接用: <img src="data:image/png;base64,{{ graph_png }}">
 ```
 
 ---
 
-## 3. Memory Poisoning Attack 架構
+## 3. Frontend：效能與 Bundle 大小
 
-### 3.1 BaseNIDSModel 不暴露記憶體介面 🔴 SE
+### 3.1 Plotly.js 完整 Bundle 🟡 FE
 
-**問題：** MPA 需要讀取和監控 TGN/TGAT 的節點記憶體向量，但當前 `BaseNIDSModel` 只定義了：
+**問題：** `import Plotly from 'plotly.js'` 引入完整 bundle（~3 MB minified, ~900 KB gzipped），但本專案只用到 stacked bar chart。這會讓首次載入慢 1–3 秒（特別在慢速網路）。
 
-```python
-def forward(self, data) -> torch.Tensor: ...
-def predict_edges(self, data) -> torch.Tensor: ...
-def predict_proba(self, data) -> torch.Tensor: ...
+**建議：** 改用 `plotly.js-basic-dist-min`（只含基本 chart types，約 900 KB minified），或用 dynamic import 延遲載入：
+
+```typescript
+// AttackTimeline.vue
+const Plotly = await import('plotly.js-basic-dist-min')
 ```
 
-`memory_poisoning.py` 無法透過統一介面存取記憶體狀態，只能直接存取 TGN/TGAT 的具體實作，破壞 ABC 設計。
+### 3.2 Cytoscape.js 大圖效能 🟡 FE
 
-**建議修正（擴展 `src/models/base.py`）：**
-
-```python
-class BaseNIDSModel(ABC, nn.Module):
-    # ... 現有方法 ...
-
-    def get_memory_state(self) -> torch.Tensor | None:
-        """Return current node memory matrix (shape: [num_nodes, memory_dim]).
-        Returns None for static models (GraphSAGE, GAT)."""
-        return None  # default: static model
-
-    def reset_memory(self) -> None:
-        """Reset node memory to zero state.
-        No-op for static models."""
-        pass  # default: no-op
-
-    @property
-    def has_memory(self) -> bool:
-        """True for temporal models with persistent node state."""
-        return False  # default: static
-```
-
-TGAT / TGN 覆寫這三個方法。`memory_poisoning.py` 透過 `model.has_memory` 檢查適用性，透過 `model.get_memory_state()` 取得快照。
-
-### 3.2 Memory Half-Life 定義的邊界情況 🟡 ML
-
-**問題：** 若攻擊非常有效（記憶體幾乎永久污染），或 DR@attack 從未恢復至 90%，`T½` 將無法定義（censored observation）。
-
-**建議：** 在 `eval/metrics.py` 中採用存活分析框架：
-
-```python
-def compute_memory_half_life(
-    dr_recovery_curve: list[float],
-    clean_baseline: float,
-    recovery_threshold: float = 0.9,
-    max_steps: int = 1000,
-) -> tuple[float | None, bool]:
-    """
-    Returns:
-        (T_half, censored)
-        T_half: steps to recovery; None if never recovered within max_steps
-        censored: True if T_half is None (right-censored observation)
-    """
-```
-
-在論文中以 Kaplan-Meier 曲線呈現跨模型的 DR recovery 過程，這比單一數值更有說服力。
-
-### 3.3 MPA 注入邊特徵生成策略未定義 🟢 ML
-
-**問題：** `target_nodes: auto` 與注入邊特徵策略都用 "auto"，但未定義選取邏輯。
+**問題：** 500 nodes + 2 000 edges 的初始渲染在低階筆電（Intel i5 + 8 GB RAM）下，Cytoscape.js 的 layout 計算（如 `cose`）可能需要 3–5 秒，且主執行緒會卡頓（無法互動）。
 
 **建議：**
 
-- **目標節點選取：** 選擇 betweenness centrality 最高的 top-K 節點（而非 degree）。Betweenness 高的節點是最多最短路徑的中繼，污染此類節點的記憶體影響最廣泛。
-- **注入邊特徵：** 從訓練集 benign 邊的特徵分佈中採樣（multivariate Gaussian fit），確保 CSR = 1.0 的同時最大化記憶體偏移量（loss = cosine_similarity(m_v_after, m_attack_prototype)）。
-
----
-
-## 4. Timing-Aware Edge Injection 架構
-
-### 4.1 Coarse 搜尋的計算成本 🔴 SE
-
-**問題：** TAEI coarse 搜尋需要對 K 個時間點各執行一次完整的模型推論（含 memory update），對 TGN 這是 `K × O(N × E)` 的操作。預設 K=10，若測試集有 50 個攻擊事件，需要 500 次完整推論。
-
-**建議優化：**
-
-1. **Batched coarse search：** 在 `edge_injection.py` 中，透過複製模型記憶體狀態（`deepcopy(model.get_memory_state())`）避免重複前向計算：
+1. **預設用 `preset` layout**（後端算好座標，直接傳 `{x, y}` 給 Cytoscape）。後端可用 `networkx` 的 `spring_layout` 計算一次座標並快取。
+2. 若要動態 layout，用 `cytoscape-cose-bilkent` 並設定 `animate: false`，或 Web Worker 計算（cytoscape-layout-utilities）。
+3. 初始只顯示 **Top-200 edges（依 confidence 降序）**，提供「Show all」按鈕。
 
 ```python
-# 粗搜尋時暫存各時間點的記憶體快照，不需重跑整個序列
-checkpoints = {}
-for i, t in enumerate(window_starts):
-    checkpoints[t] = deepcopy(model.get_memory_state())
+# app/services/graph_builder.py — 後端預算座標
+import networkx as nx
+
+def compute_layout(G: nx.Graph) -> dict[str, tuple[float, float]]:
+    pos = nx.spring_layout(G, seed=42, k=2/len(G)**0.5)
+    return {node: (float(x), float(y)) for node, (x, y) in pos.items()}
 ```
 
-2. **Early termination：** 若 coarse 搜尋前 3 個點的 ASR 差距 < 2%，跳過 fine search。
+### 3.3 輪詢 `/status` 的 Abort 邏輯 🟢 FE
 
-3. **在設定中提供 `timing_search: none` 選項**，供靜態 GNN baseline 直接跳過搜尋（已存在）。
+**問題：** 如果使用者上傳後立刻重新上傳，舊的輪詢 interval 若沒清除，會繼續觸發並覆蓋新的 sessionId。
 
-### 4.2 Timing Sensitivity Curve 的視覺化 🟢 AC
+**建議：** 在 Pinia store 中統一管理輪詢，確保每次上傳前先 abort 舊的輪詢：
 
-**建議新增至評估輸出：** 以折線圖呈現 ASR vs. injection time offset（Δt），橫軸為注入時間距離攻擊流量的秒數（-300 到 0），縱軸為 ASR。這張圖可以直觀展示時序模型的「脆弱窗口」（vulnerable window），是論文中最有說服力的視覺化之一。
+```typescript
+// stores/session.ts
+let pollingTimer: ReturnType<typeof setInterval> | null = null
+
+function startPolling(sessionId: string) {
+  stopPolling()  // abort any previous poll
+  pollingTimer = setInterval(async () => {
+    const { status, progress_pct } = await api.getStatus(sessionId)
+    if (status === 'ready' || status === 'error') stopPolling()
+    // update store...
+  }, 2000)
+}
+
+function stopPolling() {
+  if (pollingTimer) { clearInterval(pollingTimer); pollingTimer = null }
+}
+```
+
+### 3.4 首次載入體積優化 🟢 FE
+
+`vite.config.ts` 應設定 manual chunks，避免 Cytoscape + Plotly + axios 全打進同一個 chunk：
+
+```typescript
+// vite.config.ts
+export default defineConfig({
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-cytoscape': ['cytoscape'],
+          'vendor-plotly': ['plotly.js-basic-dist-min'],
+          'vendor-vue': ['vue', 'pinia', 'vue-router'],
+        }
+      }
+    }
+  }
+})
+```
+
+這樣瀏覽器可以並行下載三個 chunk，且 Cytoscape / Plotly 可以被快取（只要版本不變）。
 
 ---
 
-## 5. 評估協定完整性
+## 4. API 設計
 
-### 5.1 Ablation Study 設計缺失 🟡 AC
+### 4.1 `/analyze` 應為非同步，回傳 job_id 🟡 BE
 
-**問題：** 審稿人會要求分離各個設計選擇的效果，特別是：
+**問題：** spec 現在是 `POST /analyze/{session_id}` → 回傳 `{ status }` 並「非同步 poll」，但如果 analyze 是同步的（見 2.1），這個設計自相矛盾。
 
-| Ablation | 目的 |
-|----------|------|
-| TAEI without timing optimization（fixed random t）| 驗證 timing 最佳化本身的貢獻 |
-| MPA without constraint enforcement（CSR < 1.0） | 驗證 CSR=1.0 要求對 ASR 的影響 |
-| MPA with shorter horizon（H = 60s vs 300s） | 驗證污染持續時間對 Half-Life 的影響 |
-| TGAT vs TGN under MPA | 驗證 GRU memory vs attention 的差異 |
+**建議：** 明確定為 202 Accepted 非同步模式：
 
-**建議：** 在 `configs/eval/ablation.yaml` 中定義完整的 ablation 矩陣。
+```
+POST /analyze/{session_id}  →  202 { job_id }
+GET  /status/{session_id}   →  { status: "analyzing", progress_pct: 45 }
+                            →  { status: "ready" }
+```
 
-### 5.2 與 BAAAN (USENIX Security 2021) 的明確對比 🟡 AC
+推論完成後，結果存入 `data/sessions/{session_id}/result.json`，之後的 `GET /graph`, `GET /alerts`, `GET /timeline` 直接從此檔案讀取，不再重跑推論。
 
-**問題：** Han et al. (USENIX 2021) 的 BAAAN 是目前最相關的 NIDS 對抗攻擊工作，審稿人必然要求比較。
+### 4.2 `/adversarial` 缺少冪等性保護 🟢 BE
 
-**建議：** 在評估時明確報告：
+**問題：** 同一個 `flow_id` 用同樣的 `epsilon / steps` 可能被重複計算多次（例如前端 debounce 不完整時）。C-PGD 計算是確定性的（固定 seed），重複執行只是浪費。
 
-- BAAAN 在本框架的 CSR 分析（他們的攻擊是否滿足約束？）
-- BAAAN vs TAEI 在時序 NIDS 上的 ASR 比較（BAAAN 不考慮 timing）
-- 若 BAAAN 的代碼可用，直接在本框架中複現為 baseline
+**建議：** 在 session 目錄下快取結果：`data/sessions/{session_id}/adversarial/{flow_id}_eps{eps}_steps{steps}.json`。若檔案存在則直接回傳，不重算。
 
-### 5.3 跨資料集遷移的評估範圍 🟢 AC
+### 4.3 `/metrics` 與 static file 職責重複 🟢 BE
 
-**問題：** 目前 NF-BoT-IoT-v2 遷移實驗只計劃評估整體 ASR，但頂會審稿人通常要求：
-1. TAEI 的最佳 timing offset 是否在兩個資料集間可遷移？
-2. MPA 的 Half-Life 是否資料集相關？
+**問題：** spec 說 `reliability.json` 是「FastAPI 以靜態資源提供」，同時也定義了 `GET /metrics` endpoint。兩條路進同一份資料，讓前端不確定該用哪個。
+
+**建議：** 只保留 `GET /api/metrics`，由後端讀取並回傳 JSON。移除 FastAPI `StaticFiles` 直接暴露 `data/metrics/` 的設定。這也能防止 `data/metrics/` 其他檔案被意外暴露。
 
 ---
 
-## 6. 投稿可行性審核
+## 5. Session 與檔案管理
 
-### 6.1 目標投稿的審核標準分析
+### 5.1 CSV 上傳無大小限制 🟡 SEC
 
-| 面向 | NDSS 2027 | USENIX Security 2027 | IEEE TIFS |
-|------|-----------|----------------------|-----------|
-| **新穎性要求** | 高：需要 novel attack or defense | 非常高：需要系統性安全貢獻 | 中：學術嚴謹性優先 |
-| **本研究的契合點** | TAEI + MPA 是 novel attack；NIDS 是 NDSS 核心主題 | Threat model 需更完整；需要 real-world 驗證 | 適合完整比較研究，接受 F1 ≥ 0.90 baseline |
-| **Artifact 要求** | 鼓勵但非強制 | Artifact Evaluation 是標準流程 | 無強制要求 |
-| **頁數限制** | 10 頁（ACM 格式，不含 references） | 14 頁（USENIX 格式） | 14 頁 |
-| **建議策略** | **主要投稿目標**：攻擊發現 + CAAG 作為雙貢獻 | 備選：需要更完整的 real-world deployment 討論 | 備選 journal：可擴展為完整比較研究 |
+**問題：** `POST /upload` 接受 `multipart/form-data`，但 spec 沒有定義最大檔案大小。NF-UNSW-NB15-v2 完整版 ~500 MB，若不限制，使用者可上傳任意大小的 CSV。
 
-### 6.2 論文貢獻排序建議（與 NDSS 審稿標準對齊）
+**建議：** 在 FastAPI 層加入大小限制（demo 用途建議 50 MB；需要支援完整資料集則 500 MB）：
 
-為最大化接受率，貢獻應以以下順序呈現：
+```python
+# app/routers/analysis.py
+from fastapi import File, UploadFile, HTTPException
 
-1. **P1（主貢獻）:** Discovery of timing-dependent attack surface in temporal GNNs — TAEI + MPA 作為兩個新攻擊向量的形式化定義與實驗驗證
-2. **P2（技術貢獻）:** CAAG with CSR=1.0 enforcement — 解決 NIDS 對抗研究的根本方法論問題
-3. **P3（比較貢獻）:** Systematic robustness comparison of static vs temporal GNNs under timing-aware attacks — 反直覺的「時序 GNN 更脆弱」結論
+MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
 
-> ⚠️ 若論文將 P3（比較）放在 P1 之前，會被誤讀為 benchmark paper，接受率顯著下降。
-
-### 6.3 Artifact 準備建議（USENIX Security 必要，NDSS 加分）
-
-目前缺少以下 artifact 元件：
-
+async def upload_csv(file: UploadFile = File(...)):
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(413, detail=f"File too large (max {MAX_UPLOAD_SIZE // 1024**2} MB)")
+    # ...
 ```
-artifact/
-├── Dockerfile              ← 確保環境可重現（CUDA 12.4 + PyTorch 2.4）
-├── run_all_experiments.sh  ← 一鍵重現所有表格和圖
-├── data/
-│   └── README.md           ← 資料集取得說明（UNSW 不可直接打包）
-└── results/
-    └── expected_outputs/   ← 預期輸出值（供驗證）
+
+### 5.2 Session 目錄並發寫入安全性 🟢 BE
+
+**問題：** 若兩個請求同時對同一個 session 寫入（例如快速雙擊 analyze），可能產生 partial write 的 result.json。
+
+**建議：** 寫入時先寫 temp 檔再 rename（atomic 操作）：
+
+```python
+import tempfile, os, json
+from pathlib import Path
+
+def atomic_write_json(path: Path, data: dict) -> None:
+    dir_ = path.parent
+    with tempfile.NamedTemporaryFile('w', dir=dir_, delete=False, suffix='.tmp') as f:
+        json.dump(data, f)
+        tmp_path = f.name
+    os.replace(tmp_path, path)  # atomic on POSIX; near-atomic on Windows
 ```
 
 ---
 
-## 7. 保留問題（v0.1 仍未解決）
+## 6. 安全性
 
-以下問題在 v0.1 的 architecture review 中已識別，v0.2 確認仍需注意：
+### 6.1 Pickle 反序列化風險 🟡 SEC
 
-| 問題 | 狀態 | 備註 |
-|------|------|------|
-| `constraints.py` 位於 `src/attack/`（已修正） | ✅ 已解決 | v0.1 R1 |
-| PGD 改用 normalized gradient（已修正） | ✅ 已解決 | v0.1 R2 |
-| BaseNIDSModel / BaseAttack ABC（已實作） | ✅ 已解決 | v0.1 R3 |
-| `utils/seed.py`（已實作） | ✅ 已解決 | v0.1 R4 |
-| 靜態圖 on-demand loading（已實作） | ✅ 已解決 | v0.1 R5 |
-| TGN memory reset policy（已定義） | ✅ 已解決 | v0.1 R6 |
-| 類別不平衡 weighted loss（已統一） | ✅ 已解決 | v0.1 R7 |
-| `target_split` 欄位（已加入所有攻擊設定） | ✅ 已解決 | v0.1 R8 |
-| `comparison.py` 改用 Hydra instantiate | 🔄 待實作 | Phase 4 |
-| Checkpoint 策略（已實作） | ✅ 已解決 | v0.1 R10 |
-| Scaler 序列化（已實作） | ✅ 已解決 | v0.1 R12 |
+**問題：** `scaler.pkl` 用 Python `pickle` 序列化。Pickle 在 load 時可以執行任意程式碼。若 `data/processed/` 被修改（或共享環境中被替換），會有 RCE 風險。
+
+**建議：** 改用 `joblib`（scikit-learn 標準做法，在 pickle 之上加了安全選項）或直接序列化 scaler 參數為 JSON：
+
+```python
+# 序列化
+import json
+scaler_params = {"mean_": scaler.mean_.tolist(), "scale_": scaler.scale_.tolist()}
+with open("data/processed/static/scaler.json", "w") as f:
+    json.dump(scaler_params, f)
+
+# 反序列化
+from sklearn.preprocessing import StandardScaler
+import numpy as np
+scaler = StandardScaler()
+scaler.mean_  = np.array(params["mean_"])
+scaler.scale_ = np.array(params["scale_"])
+```
+
+### 6.2 Session ID 路徑穿越驗證 🟡 SEC
+
+**問題：** `session_id` 被用於構成檔案路徑 `data/sessions/{session_id}/`。若 session_id 未驗證，攻擊者可傳入 `../../etc/passwd` 等路徑（雖然 UUID 格式通常不會有此問題，但應該明確防範）。
+
+**建議：** 用 regex 強制驗證 UUID 格式：
+
+```python
+# app/routers/analysis.py
+import re
+UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')
+
+def validate_session_id(session_id: str) -> str:
+    if not UUID_RE.match(session_id):
+        raise HTTPException(400, detail="Invalid session ID")
+    return session_id
+```
+
+或更簡單地用 FastAPI 的 `UUID` 型別（自動驗證）：
+
+```python
+from uuid import UUID
+async def get_graph(session_id: UUID): ...
+```
+
+### 6.3 CORS 設定 🟢 SEC
+
+**問題：** 目前 CORS 硬寫 `allow_origins=["http://localhost:5173"]`，部署時需要改。
+
+**建議：** 從環境變數讀取：
+
+```python
+# app/main.py
+import os
+origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
+app.add_middleware(CORSMiddleware, allow_origins=origins, ...)
+```
+
+---
+
+## 7. 可部署性
+
+### 7.1 無 Docker / 啟動文件 🟡 DEP
+
+**問題：** README 的 Quick Start 需要手動安裝 uv、PyTorch cu124、PyG、Node.js。對「只是想 demo」的 reviewer 來說步驟多，且 CUDA 版本容易出錯。
+
+**建議（最小可行部署）：**
+
+1. 新增 `docker-compose.yml`（CPU 模式，不需 CUDA，只用來 demo）：
+
+```yaml
+# docker-compose.yml
+services:
+  backend:
+    build: .
+    ports: ["8000:8000"]
+    volumes:
+      - ./checkpoints:/app/checkpoints
+      - ./data:/app/data
+  frontend:
+    build: ./frontend
+    ports: ["5173:80"]
+    depends_on: [backend]
+```
+
+2. 新增 `Dockerfile`（後端）：
+
+```dockerfile
+FROM python:3.12-slim
+RUN pip install uv
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+RUN uv sync --no-dev
+COPY . .
+CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+3. 新增 `frontend/Dockerfile`：
+
+```dockerfile
+FROM node:20-alpine AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM nginx:alpine
+COPY --from=build /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+```
+
+### 7.2 前後端連線設定 🟢 DEP
+
+**問題：** 前端 axios client 的 `baseURL` 若寫死 `http://localhost:8000`，部署到其他主機時需要重新 build。
+
+**建議：** 用 Vite 的環境變數：
+
+```typescript
+// frontend/src/api/client.ts
+const baseURL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+```
+
+```
+# frontend/.env.example
+VITE_API_BASE_URL=http://localhost:8000
+```
 
 ---
 
@@ -297,61 +457,71 @@ artifact/
 
 | 編號 | 問題 | 面向 | 嚴重度 | 影響 | 建議行動 |
 |------|------|------|--------|------|----------|
-| R1 | BaseNIDSModel 不暴露記憶體介面 | SE | 🔴 | MPA 必須 hack 具體實作，破壞 ABC 設計 | 新增 `get_memory_state` / `reset_memory` / `has_memory` |
-| R2 | TAEI coarse 搜尋計算成本 | SE | 🔴 | K=10 時 TGN 需 500+ 次推論 | 記憶體快照 + early termination |
-| R3 | 論文核心主張缺統計支撐 | AC | 🔴 | NDSS/USENIX 審稿人必要求 | Multi-seed + bootstrap CI |
-| R4 | Threat model 不夠完整 | AC | 🟡 | 頂會標準要求明確的能力與知識假設 | 補充 5 維度 threat model 表格 |
-| R5 | MPA/TAEI 評估交叉污染 | ML | 🟡 | 不同攻擊的起始記憶體狀態不同 | 每次攻擊前重新載入 clean checkpoint |
-| R6 | Memory Half-Life 無 censored 處理 | ML | 🟡 | 永久污染情況無法量化 | 存活分析框架 + Kaplan-Meier |
-| R7 | 與 BAAAN (USENIX 2021) 缺乏直接比較 | AC | 🟡 | 審稿人必問；不對比即被視為忽視相關工作 | 複現 BAAAN 作為 baseline |
-| R8 | Ablation study 未規劃 | AC | 🟡 | 無法分離各設計選擇的效果 | 補充 `configs/eval/ablation.yaml` |
-| R9 | Artifact（Docker + scripts）未規劃 | AC | 🟡 | USENIX Artifact Evaluation 必要；NDSS 加分 | Phase 12 加入 artifact 建置 |
-| R10 | MPA 目標節點選取策略模糊 | ML | 🟢 | "auto" 難以重現 | 明確指定 betweenness centrality top-K |
-| R11 | Timing Sensitivity Curve 視覺化未規劃 | AC | 🟢 | 論文最有說服力的圖缺失 | 在 `eval/comparison.py` 加入繪圖輸出 |
-| R12 | 跨資料集 TAEI/MPA 可遷移性未評估 | AC | 🟢 | 降低 NF-BoT-IoT-v2 實驗的深度 | 在 Section 9 遷移實驗中加入此分析 |
+| R1 | GNN 推論同步執行，阻塞 event loop | BE | 🔴 | Demo 時伺服器 10–30 秒無回應 | `run_in_threadpool` 包裝所有 PyTorch 呼叫 |
+| R2 | C-PGD 同步執行，request 可能 timeout | BE | 🔴 | 瀏覽器 timeout 後顯示網路錯誤 | `run_in_threadpool` + 30s timeout |
+| R3 | WeasyPrint 同步執行，阻塞 event loop | BE | 🔴 | PDF 下載觸發時伺服器卡頓 | `run_in_threadpool` |
+| R4 | 兩個模型只載入一個 | BE | 🟡 | 使用者無法切換模型 | lifespan 同時載入兩個模型 |
+| R5 | Session 清除機制未定義 | BE | 🟡 | `data/sessions/` 持續增長 | lifespan 啟動清除協程 |
+| R6 | Cytoscape.js layout 計算卡頓 | FE | 🟡 | 低階電腦初始渲染 3–5 秒 lag | 後端預算座標（networkx spring_layout） |
+| R7 | Plotly.js 完整 bundle ~3 MB | FE | 🟡 | 首次載入慢，尤其慢速網路 | 改用 basic-dist + dynamic import |
+| R8 | pickle scaler 有 RCE 風險 | SEC | 🟡 | 被替換的 pickle 可執行任意程式碼 | 改為 JSON 序列化 |
+| R9 | session_id 路徑未驗證 | SEC | 🟡 | 路徑穿越攻擊 | FastAPI UUID 型別或 regex 驗證 |
+| R10 | CSV 上傳無大小限制 | SEC | 🟡 | 超大檔案佔滿磁碟 | 50 MB 上限 + 回傳 413 |
+| R11 | 無 Dockerfile，部署門檻高 | DEP | 🟡 | Reviewer 跑不起來，影響 GitHub 印象 | docker-compose CPU 模式 |
+| R12 | Selenium headless 產生 graph PNG | BE | 🟢 | 部署環境需安裝 Chrome | 改由前端 cy.png() 上傳 base64 |
+| R13 | `/metrics` 與 static file 職責重複 | BE | 🟢 | 前端不確定哪個是正確路徑 | 只保留 `GET /api/metrics` |
+| R14 | 前端輪詢 abort 邏輯未定義 | FE | 🟢 | 重複上傳時舊輪詢殘留 | stopPolling() 在每次上傳前呼叫 |
+| R15 | axios baseURL 寫死 | DEP | 🟢 | 部署到其他主機需重新 build | `VITE_API_BASE_URL` 環境變數 |
 
 ---
 
 ## 9. Recommended Action Items
 
-以下依實作優先序排列：
+依實作優先序排列：
 
-### 即刻（Phase 3 前，不阻塞實作但需要設計決策）
-
-```
-[ ] 擴展 BaseNIDSModel：新增 get_memory_state / reset_memory / has_memory
-[ ] 在 eval/comparison.py 加入每次攻擊前重新載入 clean checkpoint 的邏輯
-[ ] 在 configs/eval/ 加入 multi-seed 設定（seeds: [42, 123, 456, 789, 1024]）
-[ ] 補充 spec.md Section 3.3.1 的完整 5 維度 Threat Model 表格
-```
-
-### Phase 3（CAAG 實作期間）
+### 即刻（Phase 1 Scaffold 期間，不寫這些後面都是坑）
 
 ```
-[ ] edge_injection.py：加入記憶體快照 + early termination 最佳化
-[ ] memory_poisoning.py：實作 MPA，透過 get_memory_state() 介面讀取記憶體
-[ ] evaluator.py：新增 bootstrap_confidence_interval() 和 compute_memory_half_life()
-[ ] configs/attack/mpa.yaml：明確指定 target_nodes 為 betweenness_centrality_top_k
+[ ] 所有 PyTorch / WeasyPrint 呼叫一律用 run_in_threadpool 包裝
+[ ] POST /analyze 改為 202 Accepted + 輪詢模式（前端已規劃，後端要配合）
+[ ] FastAPI 路由全面改用 UUID 型別接收 session_id
+[ ] lifespan 啟動時同時載入 graphsage 和 gat 兩個模型
+[ ] 加入 CSV 上傳大小限制（50 MB）
 ```
 
-### Phase 4（評估重構期間）
+### Phase 1 週 5–6（Frontend 開始接 API 時）
 
 ```
-[ ] eval/comparison.py 改用 Hydra instantiate（清除強耦合，v0.1 遺留問題）
-[ ] 加入 Timing Sensitivity Curve 繪圖輸出（ASR vs injection offset）
-[ ] 實作 BAAAN baseline 或引用其公開結果進行比較
-[ ] configs/eval/ablation.yaml：定義完整 ablation 矩陣
+[ ] vite.config.ts 設定 manualChunks（cytoscape / plotly / vue 分離）
+[ ] 改用 plotly.js-basic-dist-min，或 dynamic import
+[ ] 後端 graph_builder.py 加入 networkx spring_layout 座標計算
+[ ] Pinia session store 加入 startPolling / stopPolling + 輪詢 abort
+[ ] axios client 改用 VITE_API_BASE_URL 環境變數
 ```
 
-### Phase 12（投稿前）
+### Phase 1 週 7–8（完成核心 views 後）
 
 ```
-[ ] Dockerfile + run_all_experiments.sh（artifact 建置）
-[ ] 執行 5-seed multi-run，確認所有表格的 95% CI
-[ ] 論文貢獻順序確認：P1 (TAEI+MPA 攻擊發現) → P2 (CAAG) → P3 (比較)
-[ ] NDSS 2027 投稿截止日確認（預期 2026 年 5-6 月）
+[ ] scaler 序列化改為 JSON（取代 pickle）
+[ ] lifespan 加入 session 清除協程（每 5 分鐘掃描，1 小時 TTL）
+[ ] /adversarial 加入快取（flow_id + epsilon + steps 為 key）
+[ ] 移除 StaticFiles 直接暴露 data/metrics/；統一走 GET /api/metrics
+[ ] ALLOWED_ORIGINS 改從環境變數讀取
+```
+
+### Phase 2 完成後（準備 GitHub 公開前）
+
+```
+[ ] 新增 docker-compose.yml（CPU 模式）+ Dockerfile（backend + frontend）
+[ ] 前端 TrafficGraph.vue 加入 cy.png() export 並上傳 base64 給 report 端點
+[ ] 移除所有 Selenium headless 相關程式碼或設計
+[ ] README 加入 "One-command demo" 區塊（docker compose up）
+[ ] 測試 docker-compose 在 GitHub Codespaces 上可正常啟動
 ```
 
 ---
 
-> 下一次審核應在 Phase 3（CAAG 實作）完成後進行，重點驗證 TAEI 和 MPA 的實驗結果是否支持論文核心主張。
+> 下一次審核建議在 Phase 1 Week 5（Inference service 完成後）進行，重點驗證：
+> (1) `/analyze` 202 非同步模式是否正確實作；
+> (2) Cytoscape.js 500 nodes 的實際渲染效能；
+> (3) `/adversarial` timeout 邊界行為。
