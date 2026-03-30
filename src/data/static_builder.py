@@ -258,6 +258,17 @@ def build_static_graphs(
     with open(output_dir / "scaler.pkl", "wb") as f:
         pickle.dump(scaler, f)
 
+    # Also save scaler parameters as JSON (avoids pickle RCE risk in web service)
+    scaler_json = {
+        "mean_": scaler.mean_.tolist(),
+        "scale_": scaler.scale_.tolist(),
+        "clip_lo_": scaler.clip_lo_.tolist(),
+        "clip_hi_": scaler.clip_hi_.tolist(),
+        "feature_cols": feature_cols,
+    }
+    with open(output_dir / "scaler.json", "w") as f:
+        json.dump(scaler_json, f, indent=2)
+
     with open(output_dir / "label2idx.json", "w") as f:
         json.dump(label2idx, f, indent=2)
 
