@@ -7,5 +7,9 @@ defaults:
 train:
   lr: 0.001
   epochs: 200
-  save_every: 5         # save checkpoint every N epochs
+  batch_size: 32
+  save_every: 10        # save periodic checkpoint every N epochs
+  val_every: 1          # run val evaluation every N epochs (increase to skip)
+  num_workers: 0        # DataLoader workers (0 = main process; safe on Windows)
+  use_amp: true         # automatic mixed precision (CUDA only)
   checkpoint_dir: ${paths.checkpoints}/${hydra:runtime.choices.model}

@@ -8,8 +8,10 @@ scaler_path:    ${paths.data_processed}/static/scaler.pkl
 # Column in the CSV that holds the multiclass attack label
 label_col: attack_cat
 
-# Tumbling window size in seconds
-window_size_s: 60
+# Tumbling window size in seconds.
+# 300 rows/window gives ~300 edges per graph — enough for meaningful GNN
+# neighbourhood aggregation with proxy node identities.
+window_size_s: 300
 
 # Chronological split ratios — must sum to 1.0 (list, not dict)
 splits: [0.60, 0.20, 0.20]

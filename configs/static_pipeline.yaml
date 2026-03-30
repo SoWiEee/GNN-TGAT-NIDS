@@ -1,0 +1,4 @@
+defaults:
+  - base
+  - data: static_default
+  - _self_

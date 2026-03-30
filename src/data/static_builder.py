@@ -87,26 +87,71 @@ def _make_key_series(
     return list(zip(ip_vals, port_vals))
 
 
-def _build_node_index(df_window: pd.DataFrame) -> dict[tuple, int]:
-    """Map (ip, port) endpoint tuples to integer node indices.
+def _get_endpoint_keys(df: pd.DataFrame) -> tuple[list[tuple], list[tuple]]:
+    """Return (src_keys, dst_keys) for every row in *df*.
 
-    Node identity is at (IP, port) granularity — the same physical host
-    appearing on different ports generates distinct nodes.  This is a
-    deliberate modeling choice: flows are port-level connections, not
-    host-level connections.
+    When explicit IP address columns are present (NF-format datasets) the keys
+    are ``(ip, port)`` tuples, giving host-level node identity.
+
+    When IP columns are absent (UNSW-NB15 processed format) the function falls
+    back to **TTL-binned proxy identifiers**:
+
+    * Source node: ``("src", sttl // 16, proto)``
+    * Destination node: ``("dst", dttl // 16, service)``
+
+    Binning TTL by 16 groups standard OS starting-TTL values into distinct
+    buckets — Linux (64 → bin 4), Windows (128 → bin 8), Cisco (255 → bin 15)
+    — giving 10–30 distinct nodes per time-window instead of the degenerate
+    2-node case.  Combined with *proto* and *service*, these proxies capture
+    enough network topology for meaningful GNN neighbourhood aggregation.
     """
-    src_keys = _make_key_series(
-        df_window,
-        _get_col(df_window, ["IPV4_SRC_ADDR", "src_ip", "Src IP"]),
-        _get_col(df_window, ["L4_SRC_PORT", "src_port", "Src Port"]),
-        "unknown_src",
+    src_ip_col = _get_col(df, ["IPV4_SRC_ADDR", "src_ip", "Src IP"])
+
+    if src_ip_col is not None:
+        # Full IP + port keys (NF-format or any dataset with explicit addresses)
+        src_keys = _make_key_series(
+            df, src_ip_col,
+            _get_col(df, ["L4_SRC_PORT", "src_port", "Src Port"]),
+            "unknown_src",
+        )
+        dst_keys = _make_key_series(
+            df, _get_col(df, ["IPV4_DST_ADDR", "dst_ip", "Dst IP"]),
+            _get_col(df, ["L4_DST_PORT", "dst_port", "Dst Port"]),
+            "unknown_dst",
+        )
+        return src_keys, dst_keys
+
+    # ── Proxy mode (no IP columns) ───────────────────────────────────────────
+    sttl_col = _get_col(df, ["sttl"])
+    dttl_col = _get_col(df, ["dttl"])
+    proto_col = _get_col(df, ["proto"])
+    service_col = _get_col(df, ["service"])
+
+    sttl_bin = (
+        (df[sttl_col].fillna(0).astype(float) // 16).astype(int).tolist()
+        if sttl_col else [0] * len(df)
     )
-    dst_keys = _make_key_series(
-        df_window,
-        _get_col(df_window, ["IPV4_DST_ADDR", "dst_ip", "Dst IP"]),
-        _get_col(df_window, ["L4_DST_PORT", "dst_port", "Dst Port"]),
-        "unknown_dst",
+    dttl_bin = (
+        (df[dttl_col].fillna(0).astype(float) // 16).astype(int).tolist()
+        if dttl_col else [0] * len(df)
     )
+    proto_vals = (
+        df[proto_col].fillna("unk").astype(str).str.lower().str[:4].tolist()
+        if proto_col else ["unk"] * len(df)
+    )
+    service_vals = (
+        df[service_col].fillna("unk").astype(str).str.lower().str[:8].tolist()
+        if service_col else ["unk"] * len(df)
+    )
+
+    src_keys = [("src", t, p) for t, p in zip(sttl_bin, proto_vals)]
+    dst_keys = [("dst", t, s) for t, s in zip(dttl_bin, service_vals)]
+    return src_keys, dst_keys
+
+
+def _build_node_index(df_window: pd.DataFrame) -> dict[tuple, int]:
+    """Map endpoint tuples to integer node indices."""
+    src_keys, dst_keys = _get_endpoint_keys(df_window)
     # dict.fromkeys preserves insertion order and deduplicates in O(n)
     unique_keys = list(dict.fromkeys(src_keys + dst_keys))
     return {k: i for i, k in enumerate(unique_keys)}
@@ -120,12 +165,7 @@ def _compute_node_features(df_window: pd.DataFrame, node2idx: dict[tuple, int]) 
     n_nodes = len(node2idx)
     node_feat = np.zeros((n_nodes, len(_NODE_AGG_FEATURES)), dtype=np.float32)
 
-    src_keys = _make_key_series(
-        df_window,
-        _get_col(df_window, ["IPV4_SRC_ADDR", "src_ip", "Src IP"]),
-        _get_col(df_window, ["L4_SRC_PORT", "src_port", "Src Port"]),
-        "unknown_src",
-    )
+    src_keys, _ = _get_endpoint_keys(df_window)
     # Map each row's source key to its node index (-1 for unknown keys)
     src_idx = np.array([node2idx.get(k, -1) for k in src_keys], dtype=np.intp)
     valid = src_idx >= 0
@@ -149,18 +189,7 @@ def _build_pyg_graph(
     scaler: StandardScaler | None = None,
 ) -> Data:
     """Build a PyG Data object from a single time-window DataFrame."""
-    src_keys = _make_key_series(
-        df_window,
-        _get_col(df_window, ["IPV4_SRC_ADDR", "src_ip", "Src IP"]),
-        _get_col(df_window, ["L4_SRC_PORT", "src_port", "Src Port"]),
-        "unknown_src",
-    )
-    dst_keys = _make_key_series(
-        df_window,
-        _get_col(df_window, ["IPV4_DST_ADDR", "dst_ip", "Dst IP"]),
-        _get_col(df_window, ["L4_DST_PORT", "dst_port", "Dst Port"]),
-        "unknown_dst",
-    )
+    src_keys, dst_keys = _get_endpoint_keys(df_window)
 
     src_indices = [node2idx[k] for k in src_keys]
     dst_indices = [node2idx[k] for k in dst_keys]

@@ -28,11 +28,22 @@ def _build_static_loaders(cfg: DictConfig) -> tuple:
     val_ds = StaticNIDSDataset(processed_dir, split="val")
     test_ds = StaticNIDSDataset(processed_dir, split="test")
 
-    batch = cfg.train.get("batch_size", 1)
-    train_loader = DataLoader(train_ds, batch_size=batch, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=batch, shuffle=False)
-    test_loader = DataLoader(test_ds, batch_size=batch, shuffle=False)
+    batch = cfg.train.get("batch_size", 32)
+    num_workers = cfg.train.get("num_workers", 0)
+    pin = torch.cuda.is_available()
 
+    train_loader = DataLoader(
+        train_ds, batch_size=batch, shuffle=True,
+        num_workers=num_workers, pin_memory=pin,
+    )
+    val_loader = DataLoader(
+        val_ds, batch_size=batch, shuffle=False,
+        num_workers=num_workers, pin_memory=pin,
+    )
+    test_loader = DataLoader(
+        test_ds, batch_size=batch, shuffle=False,
+        num_workers=num_workers, pin_memory=pin,
+    )
     return train_loader, val_loader, test_loader, train_ds.n_classes, train_ds.n_edge_features
 
 
@@ -53,19 +64,29 @@ def _train_epoch(
     optimizer: torch.optim.Optimizer,
     criterion: torch.nn.Module,
     device: torch.device,
+    scaler: torch.amp.GradScaler | None,
 ) -> float:
     """Run one training epoch; return mean loss."""
     model.train()
     total_loss = 0.0
     total_edges = 0
+    use_amp = scaler is not None
 
     for data in loader:
         data = data.to(device)
         optimizer.zero_grad()
-        logits = model(data)
-        loss = criterion(logits, data.y_multi)
-        loss.backward()
-        optimizer.step()
+
+        with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+            logits = model(data)
+            loss = criterion(logits, data.y_multi)
+
+        if use_amp:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            optimizer.step()
 
         n_edges = data.y_multi.numel()
         total_loss += loss.item() * n_edges
@@ -127,13 +148,17 @@ def main(cfg: DictConfig) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log.info("device=%s", device)
 
+    # AMP GradScaler — only active on CUDA when use_amp=true
+    use_amp = cfg.train.get("use_amp", True) and device.type == "cuda"
+    scaler: torch.amp.GradScaler | None = torch.amp.GradScaler() if use_amp else None
+    log.info("AMP=%s", use_amp)
+
     # ── Data ─────────────────────────────────────────────────────────────────
     dataset_type = cfg.data.get("graph_type", "static")
     if dataset_type == "static":
         train_loader, val_loader, test_loader, n_classes, n_edge_feat = (
             _build_static_loaders(cfg)
         )
-        # Infer node feature dim from first batch
         sample = next(iter(train_loader))
         n_node_feat = sample.x.shape[1]
     else:
@@ -172,31 +197,31 @@ def main(cfg: DictConfig) -> None:
     best_val_f1 = 0.0
     epochs = cfg.train.epochs
     save_every = cfg.train.save_every
+    val_every = cfg.train.get("val_every", 1)
 
     for epoch in range(start_epoch, epochs):
-        train_loss = _train_epoch(model, train_loader, optimizer, criterion, device)
-        val_metrics = _evaluate(model, val_loader, criterion, device)
+        train_loss = _train_epoch(model, train_loader, optimizer, criterion, device, scaler)
 
+        # Skip val evaluation on non-val epochs (log train loss only)
+        if (epoch + 1) % val_every != 0 and epoch + 1 < epochs:
+            log.info("epoch %d/%d | train_loss=%.4f", epoch + 1, epochs, train_loss)
+            save_checkpoint(model, optimizer, epoch + 1, str(resume_path))
+            continue
+
+        val_metrics = _evaluate(model, val_loader, criterion, device)
         log.info(
             "epoch %d/%d | train_loss=%.4f | val_f1=%.4f | val_loss=%.4f",
-            epoch + 1,
-            epochs,
-            train_loss,
-            val_metrics["f1"],
-            val_metrics["loss"],
+            epoch + 1, epochs, train_loss, val_metrics["f1"], val_metrics["loss"],
         )
 
-        # Save latest checkpoint
         save_checkpoint(model, optimizer, epoch + 1, str(resume_path))
 
-        # Save periodic checkpoint
         if (epoch + 1) % save_every == 0:
             save_checkpoint(
                 model, optimizer, epoch + 1,
                 str(ckpt_dir / f"epoch{epoch + 1:04d}.pt"),
             )
 
-        # Save best model
         if val_metrics["f1"] > best_val_f1:
             best_val_f1 = val_metrics["f1"]
             save_checkpoint(
@@ -204,12 +229,10 @@ def main(cfg: DictConfig) -> None:
                 str(ckpt_dir / "best.pt"),
                 extra={"val_metrics": val_metrics},
             )
-            # Also save a complete model object for the web inference service.
-            # This file is loaded by app/services/inference.py at startup.
             inference_path = ckpt_dir.parent / f"{Path(ckpt_dir).name}_best.pt"
             torch.save(model.cpu(), inference_path)
             model.to(device)
-            log.info("New best val_f1=%.4f saved → inference: %s", best_val_f1, inference_path)
+            log.info("New best val_f1=%.4f → %s", best_val_f1, inference_path)
 
     # ── Final test evaluation ────────────────────────────────────────────────
     log.info("Loading best checkpoint for final test evaluation …")
