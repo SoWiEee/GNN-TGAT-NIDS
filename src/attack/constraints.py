@@ -355,11 +355,28 @@ class ConstraintSet:
         Returns:
             A fully configured ``ConstraintSet`` instance.
         """
-        feature_names = feature_names or NF_FEATURES
-        with open(scaler_path, "rb") as f:
-            scaler = pickle.load(f)
+        scaler_path = Path(scaler_path)
 
-        n_scaler = len(scaler.mean_)
+        # Support both JSON (preferred, no RCE risk) and pickle
+        if scaler_path.suffix == ".json" or (
+            not scaler_path.exists() and scaler_path.with_suffix(".json").exists()
+        ):
+            json_path = scaler_path if scaler_path.suffix == ".json" else scaler_path.with_suffix(".json")
+            import json as _json
+            params = _json.loads(json_path.read_text())
+            mean_ = np.array(params["mean_"])
+            scale_ = np.array(params["scale_"])
+            # Use feature column names stored in the JSON if not explicitly provided
+            if feature_names is None:
+                feature_names = params.get("feature_cols") or NF_FEATURES
+        else:
+            with open(scaler_path, "rb") as f:
+                scaler = pickle.load(f)
+            mean_ = np.array(scaler.mean_)
+            scale_ = np.array(scaler.scale_)
+            feature_names = feature_names or NF_FEATURES
+
+        n_scaler = len(mean_)
         n_names = len(feature_names)
         if n_scaler != n_names:
             raise ValueError(
@@ -369,7 +386,7 @@ class ConstraintSet:
             )
 
         bounds: dict[str, tuple[float, float]] = {}
-        for name, mean, std in zip(feature_names, scaler.mean_, scaler.scale_):
+        for name, mean, std in zip(feature_names, mean_, scale_):
             # Lower bound floored at 0 for features with natural non-negative range
             # (byte/packet counts, ports, durations). Features that can legitimately
             # be negative (e.g. deltas) would need a per-feature allow-list here.

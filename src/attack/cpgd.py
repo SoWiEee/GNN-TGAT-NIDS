@@ -198,7 +198,8 @@ class CPGDAttack(BaseAttack):
         # CSR gate: only return if all constraints satisfied
         if self._scaler is not None:
             x_raw_final = self._inverse_transform(x_adv.detach().numpy())
-            if not self.cs.check(x_raw_final):
+            # check() expects 1-D; squeeze batch dim added in generate()
+            if not self.cs.check(x_raw_final.squeeze()):
                 return None
 
         return x_adv.detach()
