@@ -125,7 +125,8 @@ def main() -> None:
     if not args.skip_merge:
         print(f"  Full dataset : {_MERGED_CSV}  ({len(merged):,} flows)")
     print(f"  Demo dataset : {_DEMO_CSV}  ({len(demo):,} flows)")
-    print(f"  Feature cols : {len([c for c in merged.columns if c != 'attack_cat'])} numeric + 3 categorical")
+    n_feat = len([c for c in merged.columns if c != "attack_cat"])
+    print(f"  Feature cols : {n_feat} numeric + 3 categorical")
     print(f"  Classes      : {sorted(merged['attack_cat'].unique())}")
     print()
     print("Next step:")

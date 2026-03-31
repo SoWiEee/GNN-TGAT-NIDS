@@ -11,19 +11,18 @@ import numpy as np
 import pytest
 
 from src.attack.constraints import (
+    NF_FEATURES,
     TCP_ACK,
     TCP_FIN,
     TCP_MAX,
     TCP_PSH,
     TCP_RST,
     TCP_SYN,
-    TCP_URG,
-    is_valid_tcp_flags,
-    nearest_valid_tcp_flags,
     CoDependencyRule,
     ConstraintSet,
-    NF_FEATURES,
     SemanticConstraint,
+    is_valid_tcp_flags,
+    nearest_valid_tcp_flags,
 )
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────

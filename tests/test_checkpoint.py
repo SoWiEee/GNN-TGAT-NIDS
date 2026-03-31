@@ -7,15 +7,12 @@ handles missing files gracefully, and checks that extra metadata persists.
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 import torch
 import torch.nn as nn
 from torch.optim import Adam
 
 from src.utils.checkpoint import load_checkpoint, save_checkpoint
-
 
 # ── Minimal test model ─────────────────────────────────────────────────────────
 

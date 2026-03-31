@@ -105,7 +105,9 @@ def evaluate_under_cpgd(model, loader, epsilon: float, steps: int) -> float:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Compute reliability metrics for trained GNN models")
+    parser = argparse.ArgumentParser(
+        description="Compute reliability metrics for trained GNN models"
+    )
     parser.add_argument(
         "--processed-dir", default=str(PROCESSED_DIR),
         help="Root directory of processed static graphs",
@@ -158,7 +160,9 @@ def main() -> None:
         clean_f1 = evaluate_clean(model, test_loader)
         logger.info("[%s] clean_f1 = %.4f", name, clean_f1)
 
-        logger.info("[%s] Computing DR under C-PGD (ε=%.2f, steps=%d) …", name, args.epsilon, args.steps)
+        logger.info(
+            "[%s] Computing DR under C-PGD (ε=%.2f, steps=%d) …", name, args.epsilon, args.steps
+        )
         dr = evaluate_under_cpgd(model, test_loader, args.epsilon, args.steps)
         logger.info("[%s] dr_under_cpgd_eps01 = %.4f", name, dr)
 
@@ -189,7 +193,8 @@ def main() -> None:
     for name, m in results.items():
         f1 = f"{m['clean_f1']:.4f}" if m["clean_f1"] is not None else "N/A"
         dr = f"{m['dr_under_cpgd_eps01']:.4f}" if m["dr_under_cpgd_eps01"] is not None else "N/A"
-        delta = f"+{m['delta_f1_after_adv_training']:.4f}" if m["delta_f1_after_adv_training"] is not None else "N/A"
+        adv = m["delta_f1_after_adv_training"]
+        delta = f"+{adv:.4f}" if adv is not None else "N/A"
         print(f"  {name:12s}  clean_f1={f1}  dr_cpgd={dr}  Δf1_adv={delta}")
     print()
 

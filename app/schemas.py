@@ -1,6 +1,8 @@
 """Pydantic request/response schemas for the GNN-NIDS Analyzer API."""
 from __future__ import annotations
+
 from uuid import UUID
+
 from pydantic import BaseModel, Field
 
 

@@ -10,10 +10,9 @@ import math
 from collections import defaultdict
 from typing import Any
 
+import networkx as nx
 import numpy as np
 import torch
-import networkx as nx
-
 
 # Attack class colours (index → CSS colour)
 _CLASS_COLOURS = [
@@ -98,7 +97,9 @@ def build_graph_response(
             # Register nodes
             for nid in (src_id, dst_id):
                 if nid not in nodes:
-                    nodes[nid] = {"data": {"id": nid, "ip": nid, "riskScore": 0.0, "x": 0.0, "y": 0.0}}
+                    nodes[nid] = {
+                        "data": {"id": nid, "ip": nid, "riskScore": 0.0, "x": 0.0, "y": 0.0}
+                    }
 
             # Store raw (normalised) edge features so the adversarial module
             # can retrieve them without re-running the data pipeline.

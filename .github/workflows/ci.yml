@@ -16,10 +16,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # ruff doesn't need torch installed — use the standalone ruff action
+      # ruff doesn't need torch — use the standalone action.
+      # Pass explicit paths so the repo root is not scanned as a fallback.
       - uses: astral-sh/ruff-action@v3
         with:
-          args: "check src/"
+          args: "check src/ app/ tests/ scripts/ train.py"
 
   test:
     name: Test (CPU)
@@ -37,8 +38,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Pre-install CPU torch before uv sync so the CUDA variant is never fetched.
-      # --no-install-package torch in the next step tells uv to leave it alone.
+      # Create venv, then pre-install CPU torch before uv sync so the CUDA
+      # variant is never fetched. --no-install-package torch tells uv to skip it.
+      - name: Create virtual environment
+        run: uv venv
+
       - name: Install CPU PyTorch
         run: |
           uv pip install torch \

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import io
 import textwrap
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -15,7 +13,6 @@ from src.data.loader import (
     get_feature_columns,
     load_csv,
 )
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 

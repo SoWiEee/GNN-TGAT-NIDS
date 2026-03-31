@@ -7,7 +7,6 @@ from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
-from fastapi.responses import JSONResponse
 
 from app.schemas import AnalyzeRequest, AnalyzeResponse, StatusResponse
 from app.services.inference import run_inference
@@ -28,7 +27,8 @@ def _write_status(session_id: UUID, status: str, progress: float = 0.0, message:
 
 
 def _atomic_write_json(path: Path, data: dict) -> None:
-    import os, tempfile
+    import os
+    import tempfile
     with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False, suffix=".tmp") as f:
         json.dump(data, f)
         tmp = f.name
@@ -102,7 +102,9 @@ async def get_graph(session_id: UUID, max_edges: int = 2000):
     result = _load_result(session_id)
     graph = result.get("graph", {"nodes": [], "edges": []})
     # Truncate edges by confidence (descending) to max_edges
-    edges = sorted(graph.get("edges", []), key=lambda e: e["data"].get("confidence", 0), reverse=True)
+    edges = sorted(
+        graph.get("edges", []), key=lambda e: e["data"].get("confidence", 0), reverse=True
+    )
     graph["edges"] = edges[:max_edges]
     return graph
 

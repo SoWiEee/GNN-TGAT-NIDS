@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import analysis, adversarial, report
+from app.routers import adversarial, analysis, report
 from app.services.inference import load_models
 
 logger = logging.getLogger(__name__)

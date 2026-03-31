@@ -6,13 +6,11 @@ import json
 import textwrap
 from pathlib import Path
 
-import numpy as np
 import pytest
 import torch
 
 from src.data.static_builder import build_static_graphs
 from src.data.static_dataset import StaticNIDSDataset
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 

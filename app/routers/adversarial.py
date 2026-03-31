@@ -57,8 +57,8 @@ async def generate_adversarial(req: AdversarialRequest):
             run_in_threadpool(_sync_run_cpgd, req.session_id, req.flow_id, req.epsilon, req.steps),
             timeout=ADV_TIMEOUT_SECONDS,
         )
-    except asyncio.TimeoutError:
-        raise HTTPException(408, detail="Adversarial generation timed out (>30 s). Try reducing steps.")
+    except TimeoutError:
+        raise HTTPException(408, detail="Adversarial generation timed out (>30 s).")
     except FileNotFoundError as exc:
         raise HTTPException(404, detail=str(exc))
     except Exception as exc:

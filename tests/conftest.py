@@ -6,10 +6,10 @@ import numpy as np
 import pytest
 
 from src.attack.constraints import (
+    NF_FEATURES,
     TCP_ACK,
     TCP_PSH,
     ConstraintSet,
-    NF_FEATURES,
 )
 
 

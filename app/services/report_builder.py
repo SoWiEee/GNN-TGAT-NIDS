@@ -4,14 +4,12 @@ All heavy operations run synchronously (called via run_in_threadpool from the ro
 """
 from __future__ import annotations
 
-import base64
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
 from jinja2 import Environment, FileSystemLoader
-
 
 TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 
@@ -40,7 +38,7 @@ def build_report(
 
     context = {
         "session_id": str(session_id),
-        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        "generated_at": datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
         "filename": meta.get("csv_path", "unknown"),
         "total_flows": meta.get("total_flows", 0),
         "total_alerts": meta.get("total_alerts", 0),
