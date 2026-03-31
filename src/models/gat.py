@@ -77,7 +77,7 @@ class GATModel(BaseNIDSModel):
                     GATConv(hidden_dim, hidden_dim, heads=1, concat=False, dropout=dropout)
                 )
             else:
-                # Intermediate: num_heads heads, concat → output dim = head_dim * num_heads = hidden_dim
+                # num_heads heads, concat → output = head_dim * num_heads = hidden_dim
                 self.convs.append(
                     GATConv(hidden_dim, head_dim, heads=num_heads, concat=True, dropout=dropout)
                 )
