@@ -32,6 +32,9 @@ dependencies = [
     "weasyprint>=62.0",
     "networkx>=3.3",
     "aiofiles>=23.0",
+    # torch-scatter/sparse/cluster: install separately via uv pip
+    # uv pip install torch_scatter torch_sparse torch_cluster \
+    #   --find-links https://data.pyg.org/whl/torch-2.6.0+cu124.html
 ]
 
 [dependency-groups]
