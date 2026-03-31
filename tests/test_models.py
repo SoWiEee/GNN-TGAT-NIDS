@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import torch
 import pytest
+import torch
 from torch_geometric.data import Data
 
-from src.models.graphsage import GraphSAGEModel
-from src.models.gat import GATModel
 from src.models.base import BaseNIDSModel
-
+from src.models.gat import GATModel
+from src.models.graphsage import GraphSAGEModel
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
