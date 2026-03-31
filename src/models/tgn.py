@@ -72,20 +72,40 @@ class LastNeighborLoader:
 
     @torch.no_grad()
     def insert(self, src: Tensor, dst: Tensor, t: Tensor, msg: Tensor) -> None:
-        """Insert a batch of interactions (both directions)."""
+        """Insert a batch of interactions (both directions) — vectorised."""
         src_cpu = src.cpu()
         dst_cpu = dst.cpu()
         t_cpu   = t.cpu().float()
         msg_cpu = msg.detach().cpu().float()
 
         for node, nbr in [(src_cpu, dst_cpu), (dst_cpu, src_cpu)]:
-            for i in range(len(node)):
-                n = int(node[i])
-                pos = int(self._pos[n]) % self.size
-                self.neighbors[n, pos]   = int(nbr[i])
-                self.timestamps[n, pos]  = float(t_cpu[i])
-                self.messages[n, pos]    = msg_cpu[i]
-                self._pos[n] += 1
+            # Sort by node so same-node occurrences are contiguous.
+            sort_idx  = node.argsort(stable=True)
+            s_node    = node[sort_idx]
+            s_nbr     = nbr[sort_idx]
+            s_t       = t_cpu[sort_idx]
+            s_msg     = msg_cpu[sort_idx]
+
+            # Within-group rank: how many earlier entries share this node value.
+            # new_group[i]=True marks the start of each new node group.
+            new_group = torch.cat([
+                torch.ones(1, dtype=torch.bool),
+                s_node[1:] != s_node[:-1],
+            ])
+            group_id        = new_group.cumsum(0) - 1           # (N,) int
+            group_start_pos = new_group.nonzero(as_tuple=True)[0]  # start idx of each group
+            local_rank      = torch.arange(len(s_node)) - group_start_pos[group_id]
+
+            # Ring-buffer write position for each entry.
+            pos = (self._pos[s_node] + local_rank) % self.size  # (N,)
+
+            self.neighbors[s_node, pos]  = s_nbr
+            self.timestamps[s_node, pos] = s_t
+            self.messages[s_node, pos]   = s_msg
+
+            # Advance each node's write pointer by its occurrence count.
+            ones = torch.ones(len(s_node), dtype=self._pos.dtype)
+            self._pos.scatter_add_(0, s_node, ones)
 
     def query(self, n_id: Tensor) -> tuple[Tensor, Tensor, Tensor]:
         """Return (neighbors, timestamps, messages) for nodes *n_id* (CPU tensors)."""
@@ -276,7 +296,9 @@ class TGNModel(BaseNIDSModel):
         Must be called **after** the backward pass.  Detaches memory from the
         computational graph to prevent backprop through the entire history.
         """
-        self.memory.update_state(src, dst, t, msg)
+        # TGNMemory.last_update is torch.long; cast t here so the model API
+        # accepts either float or long timestamps from TemporalData.
+        self.memory.update_state(src, dst, t.long(), msg)
         self.neighbor_loader.insert(src, dst, t, msg)
         self.memory.detach()
 
