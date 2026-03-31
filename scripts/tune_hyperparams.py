@@ -118,7 +118,9 @@ def _objective(trial: optuna.Trial, model_name: str, n_epochs: int) -> float:
 
     all_labels = torch.cat([d.y_multi for d in train_loader])
     weights = compute_class_weights(all_labels, train_ds.n_classes, DEVICE)
-    criterion = torch.nn.CrossEntropyLoss(weight=weights)
+    gamma = trial.suggest_float("focal_gamma", 1.0, 3.0, step=0.5)
+    from src.eval.losses import FocalLoss
+    criterion = FocalLoss(weight=weights, gamma=gamma)
 
     use_amp = DEVICE.type == "cuda"
     amp_scaler = torch.amp.GradScaler() if use_amp else None

@@ -179,9 +179,17 @@ def main(cfg: DictConfig) -> None:
 
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.train.lr)
 
-    # Weighted cross-entropy (fitted on train split)
+    # Loss function — class weights always applied; focal loss reduces recall gap
     class_weights = _compute_class_weights(train_loader, n_classes, device)
-    criterion = torch.nn.CrossEntropyLoss(weight=class_weights)
+    loss_type = cfg.train.get("loss", "focal")
+    if loss_type == "focal":
+        from src.eval.losses import FocalLoss
+        gamma = float(cfg.train.get("focal_gamma", 2.0))
+        criterion = FocalLoss(weight=class_weights, gamma=gamma)
+        log.info("loss=FocalLoss(gamma=%.1f)", gamma)
+    else:
+        criterion = torch.nn.CrossEntropyLoss(weight=class_weights)
+        log.info("loss=CrossEntropyLoss")
 
     # ── Checkpoint resume ────────────────────────────────────────────────────
     ckpt_dir = Path(cfg.train.checkpoint_dir)
