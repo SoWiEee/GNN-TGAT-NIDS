@@ -621,9 +621,7 @@ uv pip install torch_scatter torch_sparse torch_cluster \
 | 模型 | Val F1 | F1 (test) | Precision | Recall | ROC-AUC | Best Epoch |
 |------|--------|-----------|-----------|--------|---------|------------|
 | GraphSAGE | 0.8567 | 0.4322 | 0.8023 | 0.3622 | 0.8337 | 151 |
-| GAT | — | — | — | — | — | — |
-
-> GAT 結果待補（訓練中）。
+| GAT | ~0.86 | 0.4716 | 0.8338 | 0.3862 | 0.8588 | 180 |
 
 ---
 
