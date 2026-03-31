@@ -14,7 +14,7 @@ from pathlib import Path
 import hydra
 import torch
 from omegaconf import DictConfig
-from torch_geometric.loader import DataLoader
+from torch_geometric.loader import DataLoader, TemporalDataLoader
 
 log = logging.getLogger(__name__)
 
@@ -47,7 +47,9 @@ def _build_static_loaders(cfg: DictConfig) -> tuple:
     return train_loader, val_loader, test_loader, train_ds.n_classes, train_ds.n_edge_features
 
 
-def _compute_class_weights(loader: DataLoader, n_classes: int, device: torch.device) -> torch.Tensor:
+def _compute_class_weights(
+    loader: DataLoader, n_classes: int, device: torch.device
+) -> torch.Tensor:
     """Aggregate all y_multi labels from the loader to compute class weights."""
     from src.eval.metrics import compute_class_weights
 
@@ -135,6 +137,123 @@ def _evaluate(
     return metrics
 
 
+def _build_temporal_loaders(cfg: DictConfig) -> tuple:
+    """Return (train_loader, val_loader, test_loader, num_nodes, n_edge_feat, n_classes)."""
+    import json
+
+    from torch_geometric.data import TemporalData
+
+    processed_dir = Path(cfg.paths.data_processed) / "temporal"
+    if not (processed_dir / "train.pt").exists():
+        raise FileNotFoundError(
+            f"Temporal data not found at {processed_dir}. "
+            "Run: uv run python src/data/temporal_builder.py"
+        )
+
+    with open(processed_dir / "meta.json") as f:
+        meta = json.load(f)
+
+    batch = cfg.train.get("batch_size", 200)
+
+    def _load(split: str) -> TemporalData:
+        return torch.load(processed_dir / f"{split}.pt", weights_only=False)
+
+    train_loader = TemporalDataLoader(_load("train"), batch_size=batch)
+    val_loader   = TemporalDataLoader(_load("val"),   batch_size=batch)
+    test_loader  = TemporalDataLoader(_load("test"),  batch_size=batch)
+
+    return (
+        train_loader, val_loader, test_loader,
+        meta["num_nodes"], meta["n_features"], meta["n_classes"],
+    )
+
+
+def _compute_class_weights_temporal(
+    loader: TemporalDataLoader, n_classes: int, device: torch.device
+) -> torch.Tensor:
+    from src.eval.metrics import compute_class_weights
+    all_labels = [batch.y for batch in loader]
+    return compute_class_weights(torch.cat(all_labels), n_classes, device=device)
+
+
+def _train_epoch_temporal(
+    model,
+    loader: TemporalDataLoader,
+    optimizer: torch.optim.Optimizer,
+    criterion: torch.nn.Module,
+    device: torch.device,
+    amp_scaler: torch.amp.GradScaler | None,
+) -> float:
+    """One training epoch for TGN — updates memory after each batch."""
+    model.train()
+    model.reset_memory()
+    total_loss = 0.0
+    total_edges = 0
+    use_amp = amp_scaler is not None
+
+    for batch in loader:
+        batch = batch.to(device)
+        optimizer.zero_grad()
+
+        with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+            logits = model(batch)
+            loss = criterion(logits, batch.y)
+
+        if use_amp:
+            amp_scaler.scale(loss).backward()
+            amp_scaler.step(optimizer)
+            amp_scaler.update()
+        else:
+            loss.backward()
+            optimizer.step()
+
+        # Update memory AFTER backward (also detaches to prevent BPTT through history)
+        model.update_state(batch.src, batch.dst, batch.t, batch.msg)
+
+        n = batch.y.numel()
+        total_loss += loss.item() * n
+        total_edges += n
+
+    return total_loss / max(total_edges, 1)
+
+
+@torch.no_grad()
+def _evaluate_temporal(
+    model,
+    loader: TemporalDataLoader,
+    criterion: torch.nn.Module,
+    device: torch.device,
+) -> dict[str, float]:
+    """Evaluate TGN — memory is read-only (not updated)."""
+    from src.eval.metrics import compute_metrics
+
+    model.eval()
+    total_loss = 0.0
+    total_edges = 0
+    all_true, all_pred, all_proba = [], [], []
+
+    for batch in loader:
+        batch = batch.to(device)
+        logits = model(batch)
+        loss = criterion(logits, batch.y)
+
+        proba = torch.softmax(logits, dim=-1)
+        pred = logits.argmax(dim=-1)
+
+        n = batch.y.numel()
+        total_loss += loss.item() * n
+        total_edges += n
+        all_true.append(batch.y.cpu())
+        all_pred.append(pred.cpu())
+        all_proba.append(proba.cpu())
+
+    metrics = compute_metrics(
+        torch.cat(all_true), torch.cat(all_pred), torch.cat(all_proba)
+    )
+    metrics["loss"] = total_loss / max(total_edges, 1)
+    return metrics
+
+
 @hydra.main(version_base=None, config_path="configs", config_name="train")
 def main(cfg: DictConfig) -> None:
     from hydra.utils import instantiate
@@ -155,32 +274,48 @@ def main(cfg: DictConfig) -> None:
 
     # ── Data ─────────────────────────────────────────────────────────────────
     dataset_type = cfg.data.get("graph_type", "static")
-    if dataset_type == "static":
+    is_temporal = dataset_type == "temporal"
+
+    if is_temporal:
+        train_loader, val_loader, test_loader, num_nodes, n_edge_feat, n_classes = (
+            _build_temporal_loaders(cfg)
+        )
+        log.info("n_classes=%d  n_edge_feat=%d  num_nodes=%d", n_classes, n_edge_feat, num_nodes)
+    else:
         train_loader, val_loader, test_loader, n_classes, n_edge_feat = (
             _build_static_loaders(cfg)
         )
         sample = next(iter(train_loader))
         n_node_feat = sample.x.shape[1]
-    else:
-        raise NotImplementedError(
-            "Temporal data pipeline (TGAT/TGN) will be implemented in Phase 3."
+        log.info(
+            "n_classes=%d  n_edge_feat=%d  n_node_feat=%d", n_classes, n_edge_feat, n_node_feat
         )
 
-    log.info("n_classes=%d  n_edge_feat=%d  n_node_feat=%d", n_classes, n_edge_feat, n_node_feat)
-
     # ── Model ────────────────────────────────────────────────────────────────
-    model: torch.nn.Module = instantiate(
-        cfg.model,
-        in_node_channels=n_node_feat,
-        in_edge_channels=n_edge_feat,
-        num_classes=n_classes,
-    )
+    if is_temporal:
+        model: torch.nn.Module = instantiate(
+            cfg.model,
+            num_nodes=num_nodes,
+            raw_msg_dim=n_edge_feat,
+            num_classes=n_classes,
+        )
+    else:
+        model: torch.nn.Module = instantiate(
+            cfg.model,
+            in_node_channels=n_node_feat,
+            in_edge_channels=n_edge_feat,
+            num_classes=n_classes,
+        )
     model = model.to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.train.lr)
 
     # Loss function — class weights always applied; focal loss reduces recall gap
-    class_weights = _compute_class_weights(train_loader, n_classes, device)
+    class_weights = (
+        _compute_class_weights_temporal(train_loader, n_classes, device)
+        if is_temporal
+        else _compute_class_weights(train_loader, n_classes, device)
+    )
     loss_type = cfg.train.get("loss", "focal")
     if loss_type == "focal":
         from src.eval.losses import FocalLoss
@@ -208,7 +343,14 @@ def main(cfg: DictConfig) -> None:
     val_every = cfg.train.get("val_every", 1)
 
     for epoch in range(start_epoch, epochs):
-        train_loss = _train_epoch(model, train_loader, optimizer, criterion, device, scaler)
+        if is_temporal:
+            train_loss = _train_epoch_temporal(
+                model, train_loader, optimizer, criterion, device, scaler
+            )
+        else:
+            train_loss = _train_epoch(
+                model, train_loader, optimizer, criterion, device, scaler
+            )
 
         # Skip val evaluation on non-val epochs (log train loss only)
         if (epoch + 1) % val_every != 0 and epoch + 1 < epochs:
@@ -216,7 +358,11 @@ def main(cfg: DictConfig) -> None:
             save_checkpoint(model, optimizer, epoch + 1, str(resume_path))
             continue
 
-        val_metrics = _evaluate(model, val_loader, criterion, device)
+        val_metrics = (
+            _evaluate_temporal(model, val_loader, criterion, device)
+            if is_temporal
+            else _evaluate(model, val_loader, criterion, device)
+        )
         log.info(
             "epoch %d/%d | train_loss=%.4f | val_f1=%.4f | val_loss=%.4f",
             epoch + 1, epochs, train_loss, val_metrics["f1"], val_metrics["loss"],
@@ -245,7 +391,18 @@ def main(cfg: DictConfig) -> None:
     # ── Final test evaluation ────────────────────────────────────────────────
     log.info("Loading best checkpoint for final test evaluation …")
     load_checkpoint(model, None, str(ckpt_dir / "best.pt"), map_location=device)
-    test_metrics = _evaluate(model, test_loader, criterion, device)
+    if is_temporal:
+        model.reset_memory()
+        # Replay train split to warm up memory before test evaluation
+        log.info("Replaying train split to warm up TGN memory …")
+        with torch.no_grad():
+            for batch in train_loader:
+                batch = batch.to(device)
+                model(batch)
+                model.update_state(batch.src, batch.dst, batch.t, batch.msg)
+        test_metrics = _evaluate_temporal(model, test_loader, criterion, device)
+    else:
+        test_metrics = _evaluate(model, test_loader, criterion, device)
 
     log.info(
         "TEST | f1=%.4f | precision=%.4f | recall=%.4f | roc_auc=%.4f",
