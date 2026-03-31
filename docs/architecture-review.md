@@ -18,6 +18,7 @@
 7. [可部署性](#7-可部署性)
 8. [Risk Summary Table](#8-risk-summary-table)
 9. [Recommended Action Items](#9-recommended-action-items)
+10. [GNN 訓練效能優化紀錄](#10-gnn-訓練效能優化紀錄)
 
 ---
 
@@ -525,3 +526,113 @@ VITE_API_BASE_URL=http://localhost:8000
 > (1) `/analyze` 202 非同步模式是否正確實作；
 > (2) Cytoscape.js 500 nodes 的實際渲染效能；
 > (3) `/adversarial` timeout 邊界行為。
+
+---
+
+## 10. GNN 訓練效能優化紀錄
+
+> 紀錄靜態基線模型（GraphSAGE / GAT）訓練過程中發現的問題與已實施的優化，供後續 TGAT / TGN 訓練參考。
+
+### 10.1 基線結果（未優化，window=300s，CrossEntropyLoss）
+
+| 模型 | F1 (test) | Precision | Recall | ROC-AUC |
+|------|-----------|-----------|--------|---------|
+| GraphSAGE | 0.4779 | 0.7979 | 0.4169 | 0.8777 |
+| GAT | 0.4391 | 0.7531 | 0.3882 | 0.8513 |
+
+**觀察**：Precision 偏高（0.75–0.80）但 Recall 偏低（0.39–0.42），加權 F1 遠低於目標 0.90。
+
+---
+
+### 10.2 核心問題：Temporal Distribution Shift 🔴
+
+**問題**：NF-UNSW-NB15-v2 的攻擊流量在時間軸上分布不均，導致嚴重的訓練/測試分佈偏移。
+
+| 資料集切割 | 視窗數 | 總邊數 | Benign 比例 | Attack 比例 |
+|-----------|--------|--------|------------|------------|
+| Train (60%) | 1,289 | 231,866 | 26.8% | 73.2% |
+| Val (20%) | 430 | 77,268 | 19.6% | 80.4% |
+| **Test (20%)** | **430** | **77,272** | **59.3%** | **40.7%** |
+
+**影響**：
+- 訓練期間攻擊流佔 73%，但測試期間只佔 41%，導致模型在測試集大量漏報（低 Recall）。
+- Class 6（最大攻擊類別）從 Train/Val 的 48k/39k 邊降至 Test 的 12k——模型針對訓練分佈學到的決策邊界，無法泛化至測試期間的流量組成。
+- Val F1 可高達 0.85（Val 分佈近似 Train），但 Test F1 僅 0.43——**此差距是資料集特性，非模型 bug**。
+
+**建議評估策略**：
+- 同時報告 **Val F1**（反映模型本身學習能力）與 **Test F1**（反映跨時間泛化能力）。
+- F1 ≥ 0.90 的目標建議以 **Val F1** 為主要指標；Test F1 作為泛化參考。
+- 期待 TGAT / TGN 的時間建模能更好地捕捉攻擊的時序規律，縮小 Val/Test 差距。
+
+---
+
+### 10.3 已實施的優化
+
+#### A. Focal Loss（取代 CrossEntropyLoss）
+
+**動機**：CrossEntropyLoss 對「容易分類的良性流」過度關注，壓縮了模型對稀有攻擊類別的學習空間。
+
+**實作**：`src/eval/losses.py` — `FocalLoss(weight, gamma)`
+
+```python
+FL(pt) = -αt · (1 − pt)^γ · log(pt)
+```
+
+- `γ = 2.0`（預設）：對 pt > 0.9 的容易樣本懲罰降低至約 1%，迫使模型專注困難樣本。
+- 結合 class weights（inverse-frequency）雙重處理類別不平衡。
+- 透過 Optuna 將 `focal_gamma` 設為可調超參（搜尋範圍 1.0–3.0，步長 0.5）。
+
+**設定位置**：`configs/train.yaml`
+
+```yaml
+train:
+  loss: focal        # "focal" | "cross_entropy"
+  focal_gamma: 2.0
+```
+
+#### B. Window Size 縮減（300s → 120s）
+
+**動機**：300s 視窗產生 516 個訓練視窗，樣本量不足；縮減至 120s 可在維持 graph density（~15–20 proxy nodes）的前提下，將訓練視窗數提升至 **1,289 個**（增加 2.5×）。
+
+**設定位置**：`configs/data/static_default.yaml`
+
+```yaml
+window_size_s: 120
+```
+
+**結果**：Val F1 從舊版的約 0.60 提升至 0.85。
+
+#### C. torch-scatter 安裝方式修正
+
+**問題**：`torch-scatter` 不得列入 `pyproject.toml` 依賴，否則 `uv sync` 會嘗試從源碼編譯，因 build subprocess 無法找到 `torch` 而失敗。
+
+**正確安裝方式**：
+
+```bash
+# 必須用 uv pip（非 uv run pip）且指定 torch 2.6.0 的 find-links URL
+uv pip install torch_scatter torch_sparse torch_cluster \
+    --find-links https://data.pyg.org/whl/torch-2.6.0+cu124.html
+```
+
+---
+
+### 10.4 優化後結果（window=120s，FocalLoss γ=2.0）
+
+| 模型 | Val F1 | F1 (test) | Precision | Recall | ROC-AUC | Best Epoch |
+|------|--------|-----------|-----------|--------|---------|------------|
+| GraphSAGE | 0.8567 | 0.4322 | 0.8023 | 0.3622 | 0.8337 | 151 |
+| GAT | — | — | — | — | — | — |
+
+> GAT 結果待補（訓練中）。
+
+---
+
+### 10.5 後續優化方向
+
+1. **Optuna 超參搜尋**：執行 `uv run python scripts/tune_hyperparams.py --model graphsage --trials 50 --epochs 40`，搜尋 `lr`、`hidden_dim`、`num_layers`、`focal_gamma` 的最佳組合。
+
+2. **閾值校準（Test-time Calibration）**：class weights 由訓練集分佈計算，不匹配測試集。可在 Val 集上用 Platt scaling 或 Temperature scaling 校準輸出機率。
+
+3. **Macro F1 作為補充指標**：Weighted F1 受 Benign 類別（測試集 59%）主導，Macro F1 可更公平地反映各攻擊類別的識別能力。
+
+4. **Temporal GNN（下一階段）**：TGAT / TGN 透過 time2vec + 連續時間建模，理論上能更好地捕捉攻擊的時序特徵，有助縮小 Val/Test 泛化差距。
