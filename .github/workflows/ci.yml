@@ -16,22 +16,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
+      # ruff doesn't need torch installed — use the standalone ruff action
+      - uses: astral-sh/ruff-action@v3
         with:
-          version: "latest"
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dev dependencies
-        run: uv sync --group dev
-
-      - name: Run ruff
-        run: uv run ruff check src/
+          args: "check src/"
 
   test:
     name: Test (CPU)
@@ -49,26 +37,28 @@ jobs:
         with:
           python-version: "3.12"
 
-      # CI uses CPU-only PyTorch — override the cu124 source with the CPU index
-      - name: Install dependencies (CPU torch)
+      # Pre-install CPU torch before uv sync so the CUDA variant is never fetched.
+      # --no-install-package torch in the next step tells uv to leave it alone.
+      - name: Install CPU PyTorch
         run: |
-          uv sync --group dev \
-            --override-build-constraints /dev/null \
-            --index-strategy first-match
-        env:
-          # Tell uv to resolve torch from the CPU index, not cu124
-          UV_INDEX_STRATEGY: first-match
+          uv pip install torch \
+            --index-url https://download.pytorch.org/whl/cpu
 
-      # Install PyG CPU wheels separately (mirrors the CUDA install in CLAUDE.md)
+      # Install everything else from the lockfile; skip torch (already installed).
+      - name: Install project + dev dependencies
+        run: uv sync --group dev --no-install-package torch
+
+      # PyG C extensions — CPU wheel URL derived from the installed torch version.
       - name: Install PyG CPU extensions
         run: |
+          TORCH_VER=$(uv run python -c "import torch; print(torch.__version__.split('+')[0])")
           uv pip install torch_scatter torch_sparse torch_cluster \
-            --find-links https://data.pyg.org/whl/torch-$(uv run python -c "import torch; print(torch.__version__.split('+')[0])")+cpu.html
+            --find-links "https://data.pyg.org/whl/torch-${TORCH_VER}+cpu.html"
 
       - name: Run tests
         run: uv run pytest --tb=short -q
 
-      - name: Upload coverage
+      - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
