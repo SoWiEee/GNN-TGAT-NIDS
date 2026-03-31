@@ -15,7 +15,9 @@ _TIMESTAMP_CANDIDATES = ["FIRST_SEEN", "Timestamp", "timestamp", "first_seen", "
 _LABEL_CANDIDATES = ["Label", "label", "Attack", "attack", "class", "Class"]
 
 
-def load_csv(path: str | Path, timestamp_col: str | None = None, label_col: str | None = None) -> pd.DataFrame:
+def load_csv(
+    path: str | Path, timestamp_col: str | None = None, label_col: str | None = None
+) -> pd.DataFrame:
     """Load a NetFlow CSV and ensure timestamp and label columns are present.
 
     Auto-detects timestamp and label columns if not specified.  If no timestamp

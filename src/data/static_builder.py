@@ -24,14 +24,13 @@ import pickle
 from pathlib import Path
 from typing import Any
 
+import hydra
 import numpy as np
 import pandas as pd
 import torch
 from omegaconf import DictConfig
 from sklearn.preprocessing import StandardScaler
 from torch_geometric.data import Data
-
-import hydra
 
 from src.data.loader import (
     chronological_split,

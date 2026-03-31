@@ -21,9 +21,9 @@ Usage:
 from __future__ import annotations
 
 import pickle
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 import numpy as np
 
@@ -338,7 +338,7 @@ class ConstraintSet:
         scaler_path: str | Path,
         feature_names: list[str] | None = None,
         **kwargs,
-    ) -> "ConstraintSet":
+    ) -> ConstraintSet:
         """Build a ConstraintSet with feature bounds derived from a fitted scaler.
 
         Bounds are set to ``mean ± 3σ`` from the StandardScaler, clipped to
@@ -361,7 +361,9 @@ class ConstraintSet:
         if scaler_path.suffix == ".json" or (
             not scaler_path.exists() and scaler_path.with_suffix(".json").exists()
         ):
-            json_path = scaler_path if scaler_path.suffix == ".json" else scaler_path.with_suffix(".json")
+            json_path = (
+                scaler_path if scaler_path.suffix == ".json" else scaler_path.with_suffix(".json")
+            )
             import json as _json
             params = _json.loads(json_path.read_text())
             mean_ = np.array(params["mean_"])

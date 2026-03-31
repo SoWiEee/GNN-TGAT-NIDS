@@ -31,7 +31,7 @@ class BaseAttack(ABC):
     # ── Abstract interface ────────────────────────────────────────────────
 
     @abstractmethod
-    def generate(self, model: "BaseNIDSModel", data, **kwargs):
+    def generate(self, model: BaseNIDSModel, data, **kwargs):
         """Generate adversarial examples against ``model``.
 
         Args:
