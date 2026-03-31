@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dev dependencies
+        run: uv sync --group dev
+
+      - name: Run ruff
+        run: uv run ruff check src/
+
+  test:
+    name: Test (CPU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # CI uses CPU-only PyTorch — override the cu124 source with the CPU index
+      - name: Install dependencies (CPU torch)
+        run: |
+          uv sync --group dev \
+            --override-build-constraints /dev/null \
+            --index-strategy first-match
+        env:
+          # Tell uv to resolve torch from the CPU index, not cu124
+          UV_INDEX_STRATEGY: first-match
+
+      # Install PyG CPU wheels separately (mirrors the CUDA install in CLAUDE.md)
+      - name: Install PyG CPU extensions
+        run: |
+          uv pip install torch_scatter torch_sparse torch_cluster \
+            --find-links https://data.pyg.org/whl/torch-$(uv run python -c "import torch; print(torch.__version__.split('+')[0])")+cpu.html
+
+      - name: Run tests
+        run: uv run pytest --tb=short -q
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: .pytest_cache/
+          retention-days: 7
