@@ -33,8 +33,12 @@ class FocalLoss(nn.Module):
         self.reduction = reduction
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        # Upcast to float32: AMP may pass float16 logits whose extreme values
+        # cause log_softmax → -inf (float16 underflow), producing NaN loss.
+        logits = logits.float()
+        weight = self.weight.float() if self.weight is not None else None  # type: ignore[union-attr]
         # Per-sample CE without reduction; weight applies class-level α
-        ce = F.cross_entropy(logits, targets, weight=self.weight, reduction="none")
+        ce = F.cross_entropy(logits, targets, weight=weight, reduction="none")
         # p_t = probability assigned to the correct class
         pt = torch.exp(-ce)
         focal = (1.0 - pt) ** self.gamma * ce

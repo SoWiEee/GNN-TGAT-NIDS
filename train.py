@@ -78,7 +78,8 @@ def _train_epoch(
         data = data.to(device)
         optimizer.zero_grad()
 
-        with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+        with torch.amp.autocast(device_type=device.type, enabled=use_amp,
+                                dtype=torch.bfloat16):
             logits = model(data)
             loss = criterion(logits, data.y_multi)
 
@@ -195,7 +196,8 @@ def _train_epoch_temporal(
         batch = batch.to(device)
         optimizer.zero_grad()
 
-        with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+        with torch.amp.autocast(device_type=device.type, enabled=use_amp,
+                                dtype=torch.bfloat16):
             logits = model(batch)
             loss = criterion(logits, batch.y)
 
