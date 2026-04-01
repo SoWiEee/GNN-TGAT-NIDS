@@ -334,12 +334,19 @@ def main(cfg: DictConfig) -> None:
     start_epoch = 0
 
     resume_path = ckpt_dir / "latest.pt"
+    best_val_f1 = 0.0
     if resume_path.exists():
         start_epoch = load_checkpoint(model, optimizer, str(resume_path), map_location=device)
+        # Restore best_val_f1 so resume never overwrites a better checkpoint
+        best_ckpt_path = ckpt_dir / "best.pt"
+        if best_ckpt_path.exists():
+            best_payload = torch.load(best_ckpt_path, map_location="cpu", weights_only=True)
+            best_val_f1 = best_payload.get("extra", {}).get("val_metrics", {}).get("f1", 0.0)
+            if best_val_f1 > 0:
+                log.info("Restored best_val_f1=%.4f from best checkpoint", best_val_f1)
         log.info("Resumed from epoch %d", start_epoch)
 
     # ── Training loop ────────────────────────────────────────────────────────
-    best_val_f1 = 0.0
     epochs = cfg.train.epochs
     save_every = cfg.train.save_every
     val_every = cfg.train.get("val_every", 1)
