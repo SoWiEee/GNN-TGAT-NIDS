@@ -20,7 +20,7 @@ jobs:
       # Pass explicit paths so the repo root is not scanned as a fallback.
       - uses: astral-sh/ruff-action@v3
         with:
-          args: "check src/ app/ tests/ scripts/ train.py"
+          args: "check src/ app/ tests/ scripts/ train.py attack.py"
 
   test:
     name: Test (CPU)

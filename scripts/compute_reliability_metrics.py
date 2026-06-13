@@ -32,7 +32,7 @@ PROCESSED_DIR = Path("data/processed/static")
 CHECKPOINTS_DIR = Path("checkpoints")
 OUTPUT_PATH = Path("data/metrics/reliability.json")
 
-MODEL_NAMES = ["graphsage", "gat"]
+MODEL_NAMES = ["graphsage", "gat", "tgat", "tgn"]
 CPGD_EPSILON = 0.1
 CPGD_STEPS = 40
 

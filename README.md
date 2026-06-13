@@ -236,7 +236,8 @@ GNN-NIDS-Analyzer/
 │   │   ├── constraints.py      ← TCP validity, co-dependency, bounds
 │   │   ├── cpgd.py             ← Constrained PGD (feature perturbation)
 │   │   ├── edge_injection.py   ← Edge injection attack (structure)
-│   │   └── gan_generator.py    ← WGAN-GP adversarial flow generator
+│   │   ├── gan_generator.py    ← WGAN-GP adversarial flow generator
+│   │   └── memory_poisoning.py ← TGN memory poisoning attack
 │   ├── defense/
 │   │   └── adversarial_training.py ← C-PGD augmented training
 │   └── utils/
@@ -302,7 +303,18 @@ GNN-NIDS-Analyzer/
 > # then follow Quick Start steps 2 → 5
 > ```
 
-*Screenshots / demo video — coming soon*
+### Screenshots
+
+<!-- Add screenshots to docs/screenshots/ and uncomment the rows below -->
+| View | Screenshot |
+|------|-----------|
+| Traffic Graph | `docs/screenshots/traffic-graph.png` |
+| Alert List | `docs/screenshots/alert-list.png` |
+| Attack Timeline | `docs/screenshots/attack-timeline.png` |
+| Model Reliability | `docs/screenshots/reliability-panel.png` |
+| Adversarial Report | `docs/screenshots/adversarial-report.png` |
+
+*Capture with `npm run dev` + backend running, then replace paths above with `![alt](path)` syntax.*
 
 ---
 

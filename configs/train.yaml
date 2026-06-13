@@ -15,3 +15,7 @@ train:
   loss: focal           # "focal" | "cross_entropy"
   focal_gamma: 2.0      # focusing exponent (ignored when loss=cross_entropy)
   checkpoint_dir: ${paths.checkpoints}/${hydra:runtime.choices.model}
+  adversarial_training: false  # enable C-PGD augmented training
+  adv_epsilon: 0.1             # adversarial perturbation budget
+  adv_steps: 10                # PGD steps for adversarial example generation
+  adv_ratio: 0.3               # fraction of batch replaced with adversarial examples

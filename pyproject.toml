@@ -47,6 +47,9 @@ dev = [
     "optuna>=3.6",
     "optuna-dashboard>=0.15",
 ]
+pcap = [
+    "nfstream>=6.5",
+]
 
 # PyTorch CUDA wheels — non-macOS uses cu124, macOS falls back to CPU
 [tool.uv.sources]

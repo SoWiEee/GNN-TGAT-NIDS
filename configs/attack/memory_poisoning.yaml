@@ -1,0 +1,5 @@
+_target_: src.attack.memory_poisoning.MemoryPoisoningAttack
+n_poison: 20
+poison_strategy: benign_mean
+target_split: test
+memory_reset_policy: before_each_attack

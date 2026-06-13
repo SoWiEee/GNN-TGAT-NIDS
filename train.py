@@ -351,10 +351,33 @@ def main(cfg: DictConfig) -> None:
     save_every = cfg.train.save_every
     val_every = cfg.train.get("val_every", 1)
 
+    # ── Adversarial training setup (static models only) ────────────────────
+    use_adv = cfg.train.get("adversarial_training", False) and not is_temporal
+    adv_cfg = None
+    if use_adv:
+        from src.defense.adversarial_training import AdvTrainingConfig, adversarial_train_epoch
+
+        adv_cfg = AdvTrainingConfig(
+            epsilon=float(cfg.train.get("adv_epsilon", 0.1)),
+            steps=int(cfg.train.get("adv_steps", 10)),
+            ratio=float(cfg.train.get("adv_ratio", 0.3)),
+            scaler_path=str(Path(cfg.paths.data_processed) / "static" / "scaler.json")
+            if (Path(cfg.paths.data_processed) / "static" / "scaler.json").exists()
+            else None,
+        )
+        log.info(
+            "Adversarial training ENABLED: ε=%.3f, steps=%d, ratio=%.2f",
+            adv_cfg.epsilon, adv_cfg.steps, adv_cfg.ratio,
+        )
+
     for epoch in range(start_epoch, epochs):
         if is_temporal:
             train_loss = _train_epoch_temporal(
                 model, train_loader, optimizer, criterion, device, scaler
+            )
+        elif use_adv:
+            train_loss = adversarial_train_epoch(
+                model, train_loader, optimizer, criterion, device, adv_cfg, scaler
             )
         else:
             train_loss = _train_epoch(
@@ -392,7 +415,8 @@ def main(cfg: DictConfig) -> None:
                 str(ckpt_dir / "best.pt"),
                 extra={"val_metrics": val_metrics},
             )
-            inference_path = ckpt_dir.parent / f"{Path(ckpt_dir).name}_best.pt"
+            suffix = "_adv_best.pt" if use_adv else "_best.pt"
+            inference_path = ckpt_dir.parent / f"{Path(ckpt_dir).name}{suffix}"
             torch.save(model.cpu(), inference_path)
             model.to(device)
             log.info("New best val_f1=%.4f → %s", best_val_f1, inference_path)
