@@ -4,7 +4,7 @@
 
 **Version:** 1.0.0
 **Status:** Draft
-**Last Updated:** 2026-03
+**Last Updated:** 2026-06
 
 ---
 
@@ -90,10 +90,10 @@ flowchart LR
 
 ### 1.3 Out of Scope
 
-- Live PCAP capture / streaming inference (Phase 3 future work)
-- TGAT / TGN temporal models in the web app (Phase 3; models exist in `src/` but are not wired to the UI in v1)
+- Live PCAP capture / streaming inference
 - Multi-user authentication / session management
 - Production deployment hardening (TLS, rate limiting)
+- Memory Poisoning Attack visualization
 
 ---
 
@@ -189,11 +189,17 @@ src/                           # ML core
 ├── models/
 │   ├── base.py                ← BaseNIDSModel ABC
 │   ├── graphsage.py           ← ✅ implemented
-│   └── gat.py                 ← ✅ implemented
+│   ├── gat.py                 ← ✅ implemented
+│   ├── tgat.py                ← ✅ implemented (Phase 3)
+│   └── tgn.py                 ← ✅ implemented (Phase 3)
 ├── attack/
 │   ├── base.py                ← BaseAttack ABC
 │   ├── constraints.py         ← ✅ implemented (TCP, bounds, co-dep)
-│   └── cpgd.py                ← Phase 2
+│   ├── cpgd.py                ← ✅ implemented
+│   ├── edge_injection.py      ← ✅ implemented
+│   └── gan_generator.py       ← ✅ implemented
+├── defense/
+│   └── adversarial_training.py ← ✅ implemented
 ├── data/
 │   ├── loader.py              ← ✅ implemented
 │   ├── static_builder.py      ← ✅ implemented
@@ -232,7 +238,9 @@ frontend/                      # Vue 3 + Vite
 └── package.json
 
 scripts/
-└── compute_reliability_metrics.py  ← offline, run once after training
+├── compute_reliability_metrics.py  ← offline, run once after training
+├── tune_hyperparams.py             ← Optuna hyperparameter search
+└── pcap_to_netflow.py              ← PCAP → NetFlow CSV (nfstream)
 ```
 
 > **重要：** `constraints.py` 屬於攻擊邏輯，放在 `src/attack/` 而非 `src/data/`，以避免資料模組對攻擊模組的反向依賴。
@@ -403,9 +411,9 @@ with open(scaler_path, "wb") as f:
 | Loss | Weighted cross-entropy（class weights from train split） |
 | `memory_reset_policy` | `before_each_attack`（見下） |
 
-#### 3.2.3 Temporal Models (Phase 3)
+#### 3.2.3 Temporal Models
 
-TGAT and TGN are implemented in `src/models/` but are **not connected to the web app in v1**. They are trained and evaluated offline. When wired into the app in Phase 3, the `BaseNIDSModel` interface ensures the rest of the stack requires no changes.
+TGAT and TGN are implemented in `src/models/` and **connected to the web app**. The frontend model selector offers all four models (GraphSAGE, GAT, TGAT, TGN). Temporal models use `_sync_inference_temporal()` in `inference.py` which builds static graphs for visualization while running temporal model inference.
 
 > **Quality gate:** GraphSAGE / GAT must reach weighted F1 ≥ 0.90 on NF-UNSW-NB15-v2 test split before Phase 2 (adversarial module) begins.
 
@@ -724,20 +732,28 @@ The demo CSV is tracked by git. The full datasets are not.
 | 7 | Alert list + timeline | Alert list with feature importance; Plotly.js stacked bar chart |
 | 8 | Model reliability panel | `compute_reliability_metrics.py`; pre-computed `reliability.json` served |
 
-### Phase 2 — Adversarial & Depth (Weeks 9–12)
+### Phase 2 — Adversarial & Depth (Weeks 9–12) ✅
 
-| Week | Milestone | Deliverable |
-|------|-----------|-------------|
-| 9 | C-PGD module | `src/attack/cpgd.py`; constraint projection; CSR = 1.0 enforced |
-| 10 | Adversarial comparison view | Side-by-side table; delta% per feature; constraint status indicators |
-| 11 | Report generation | Jinja2 template; WeasyPrint PDF; HTML download |
-| 12 | Demo polish + docs | `data/demo/` curated; README screenshots; public GitHub release |
+| Week | Milestone | Deliverable | Status |
+|------|-----------|-------------|--------|
+| 9 | C-PGD module | `src/attack/cpgd.py`; constraint projection; CSR = 1.0 enforced | ✅ |
+| 10 | Adversarial comparison view | Side-by-side table; delta% per feature; constraint status indicators | ✅ |
+| 10 | Edge Injection attack | `src/attack/edge_injection.py`; structure-based attack | ✅ |
+| 10 | GAN attack | `src/attack/gan_generator.py`; WGAN-GP adversarial flow generator | ✅ |
+| 10 | Adversarial training | `src/defense/adversarial_training.py`; C-PGD augmented training | ✅ |
+| 11 | Report generation | Jinja2 template; WeasyPrint PDF; HTML download | ✅ |
+| 11 | Attack CLI | `attack.py` Hydra entry point for all attack methods | ✅ |
+| 12 | Demo polish + docs | `data/demo/` curated; README updated | ✅ |
 
-### Phase 3 — Temporal Models (Future)
+### Phase 3 — Temporal Models ✅
 
-- TGAT / TGN models for dynamic graph inference
-- PCAP to NetFlow conversion via nfstream
-- Memory Poisoning Attack visualization
+| Item | Deliverable | Status |
+|------|-------------|--------|
+| TGAT model | `src/models/tgat.py` — stateless temporal graph attention | ✅ |
+| TGN model | `src/models/tgn.py` — GRU-based temporal graph network | ✅ |
+| Web app integration | TGAT/TGN selectable in frontend; temporal inference backend | ✅ |
+| PCAP conversion | `scripts/pcap_to_netflow.py` — nfstream-based PCAP → NetFlow CSV | ✅ |
+| Memory Poisoning Attack | Visualization of temporal model memory manipulation | Future |
 
 ---
 

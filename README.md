@@ -35,8 +35,8 @@ flowchart LR
 
     subgraph Backend["Backend — FastAPI"]
         SB["Static Graph Builder\n300 s tumbling windows"]
-        GNN["GNN Inference\nGraphSAGE / GAT"]
-        ADV["Adversarial Module\nC-PGD + Constraint Check"]
+        GNN["GNN Inference\nGraphSAGE / GAT / TGAT / TGN"]
+        ADV["Adversarial Module\nC-PGD / Edge Injection / GAN"]
         RPT["Report Generator\nJinja2 → PDF / HTML"]
     end
 
@@ -92,8 +92,14 @@ uv run python src/data/static_builder.py
 ### 3. Train models (or use pre-trained checkpoints)
 
 ```bash
+# Static models
 uv run python train.py model=graphsage
 uv run python train.py model=gat
+
+# Temporal models (requires temporal data built first)
+uv run python src/data/temporal_builder.py
+uv run python train.py model=tgat data=temporal_default
+uv run python train.py model=tgn data=temporal_default
 ```
 
 ### 4. Pre-compute model reliability metrics
@@ -222,11 +228,17 @@ GNN-NIDS-Analyzer/
 │   ├── models/
 │   │   ├── base.py             ← BaseNIDSModel ABC
 │   │   ├── graphsage.py        ← 3-layer GraphSAGE edge classifier
-│   │   └── gat.py              ← 4-head GAT with attention export
+│   │   ├── gat.py              ← 4-head GAT with attention export
+│   │   ├── tgat.py             ← Temporal Graph Attention Network
+│   │   └── tgn.py              ← Temporal Graph Network (GRU memory)
 │   ├── attack/
 │   │   ├── base.py             ← BaseAttack ABC
 │   │   ├── constraints.py      ← TCP validity, co-dependency, bounds
-│   │   └── cpgd.py             ← Constrained PGD (adversarial comparison)
+│   │   ├── cpgd.py             ← Constrained PGD (feature perturbation)
+│   │   ├── edge_injection.py   ← Edge injection attack (structure)
+│   │   └── gan_generator.py    ← WGAN-GP adversarial flow generator
+│   ├── defense/
+│   │   └── adversarial_training.py ← C-PGD augmented training
 │   └── utils/
 │       ├── seed.py
 │       └── checkpoint.py
@@ -258,7 +270,8 @@ GNN-NIDS-Analyzer/
 ├── scripts/
 │   ├── create_demo_dataset.py      ← merge UNSW-NB15 CSVs, create demo sample
 │   ├── compute_reliability_metrics.py ← clean F1 + C-PGD DR → reliability.json
-│   └── tune_hyperparams.py         ← Optuna Bayesian hyperparameter search
+│   ├── tune_hyperparams.py         ← Optuna Bayesian hyperparameter search
+│   └── pcap_to_netflow.py          ← PCAP → NetFlow CSV (nfstream)
 ├── configs/                    # Hydra configs
 ├── data/
 │   ├── raw/                    ← place dataset CSVs here (git-ignored)
@@ -268,7 +281,9 @@ GNN-NIDS-Analyzer/
 │       └── reliability.json    ← pre-computed F1 / DR / ΔF1
 ├── checkpoints/                ← pre-trained model weights (git-ignored)
 │   ├── graphsage_best.pt
-│   └── gat_best.pt
+│   ├── gat_best.pt
+│   ├── tgat_best.pt
+│   └── tgn_best.pt
 ├── tests/
 ├── docs/
 │   └── spec.md
@@ -287,19 +302,19 @@ GNN-NIDS-Analyzer/
 > # then follow Quick Start steps 2 → 5
 > ```
 
-*Screenshots / demo video — coming in Phase 2*
+*Screenshots / demo video — coming soon*
 
 ---
 
 ## Model Reliability (Pre-computed on NF-UNSW-NB15-v2 test split)
 
-| Metric | GraphSAGE | GAT |
-|--------|:---------:|:---:|
-| Weighted F1 (clean) | TBD | TBD |
-| DR@attack — C-PGD ε=0.1 | TBD | TBD |
-| ΔF1 after adversarial training | TBD | TBD |
+| Metric | GraphSAGE | GAT | TGAT | TGN |
+|--------|:---------:|:---:|:----:|:---:|
+| Weighted F1 (clean) | TBD | TBD | TBD | TBD |
+| DR@attack — C-PGD ε=0.1 | TBD | TBD | TBD | TBD |
+| ΔF1 after adversarial training | TBD | TBD | — | — |
 
-*Values will be filled after Phase 1 training is complete.*
+*Values will be filled after training is complete. Run `scripts/compute_reliability_metrics.py` to populate.*
 
 ---
 
@@ -308,7 +323,7 @@ GNN-NIDS-Analyzer/
 | Layer | Technology |
 |-------|-----------|
 | ML framework | PyTorch 2.4 + PyTorch Geometric 2.6 |
-| GNN models | GraphSAGE, GAT (Phase 2: TGAT, TGN) |
+| GNN models | GraphSAGE, GAT, TGAT, TGN |
 | Backend | FastAPI + uvicorn |
 | Frontend | Vue 3 + Vite + TypeScript |
 | Graph visualization | Cytoscape.js |
@@ -329,23 +344,28 @@ GNN-NIDS-Analyzer/
 ## Roadmap
 
 **Phase 1 — Core Tool** (Weeks 1–8)
-- [ ] FastAPI backend + CSV upload endpoint
-- [ ] GNN inference service
-- [ ] Vue 3 frontend scaffold
-- [ ] Traffic graph view (Cytoscape.js)
-- [ ] Alert list view
-- [ ] Attack timeline view
-- [ ] Model reliability panel (pre-computed JSON)
+- [x] FastAPI backend + CSV upload endpoint
+- [x] GNN inference service
+- [x] Vue 3 frontend scaffold
+- [x] Traffic graph view (Cytoscape.js)
+- [x] Alert list view
+- [x] Attack timeline view
+- [x] Model reliability panel (pre-computed JSON)
 
 **Phase 2 — Adversarial & Depth** (Weeks 9–12)
-- [ ] C-PGD adversarial module (`src/attack/cpgd.py`)
-- [ ] Adversarial comparison report view
-- [ ] PDF / HTML export
-- [ ] Curated demo dataset + demo video
+- [x] C-PGD adversarial module (`src/attack/cpgd.py`)
+- [x] Edge Injection attack (`src/attack/edge_injection.py`)
+- [x] GAN-based adversarial generator (`src/attack/gan_generator.py`)
+- [x] Adversarial training defense (`src/defense/adversarial_training.py`)
+- [x] Adversarial comparison report view
+- [x] PDF / HTML export
+- [x] Curated demo dataset
 
-**Phase 3 — Temporal Models** (Future)
-- [ ] TGAT / TGN models
-- [ ] PCAP → NetFlow conversion (nfstream)
+**Phase 3 — Temporal Models**
+- [x] TGAT model (`src/models/tgat.py`)
+- [x] TGN model (`src/models/tgn.py`)
+- [x] Temporal models wired into web app
+- [x] PCAP → NetFlow conversion (`scripts/pcap_to_netflow.py`, nfstream)
 - [ ] Memory Poisoning Attack visualization
 
 ---

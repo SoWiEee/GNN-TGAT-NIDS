@@ -28,7 +28,11 @@ CHECKPOINTS_DIR = Path("checkpoints")
 CHECKPOINT_FILES = {
     "graphsage": CHECKPOINTS_DIR / "graphsage_best.pt",
     "gat": CHECKPOINTS_DIR / "gat_best.pt",
+    "tgat": CHECKPOINTS_DIR / "tgat_best.pt",
+    "tgn": CHECKPOINTS_DIR / "tgn_best.pt",
 }
+
+TEMPORAL_MODELS = {"tgat", "tgn"}
 
 
 def _load_single_model(name: str, path: Path) -> BaseNIDSModel | None:
@@ -72,10 +76,14 @@ def _sync_inference(csv_path: str, model_name: str) -> dict[str, Any]:
     import tempfile
 
     from app.services.graph_builder import build_graph_response
-    from src.data.static_builder import build_static_graphs
-    from src.data.static_dataset import StaticNIDSDataset
 
     model = get_model(model_name)
+
+    if model_name in TEMPORAL_MODELS:
+        return _sync_inference_temporal(csv_path, model_name, model)
+
+    from src.data.static_builder import build_static_graphs
+    from src.data.static_dataset import StaticNIDSDataset
 
     # Build graphs into a temp dir; pass ratios=(1,0,0) so ALL flows land
     # in the "train" split — for inference we want every window, not just test.
@@ -87,6 +95,44 @@ def _sync_inference(csv_path: str, model_name: str) -> dict[str, Any]:
             ratios=(1.0, 0.0, 0.0),
         )
         dataset = StaticNIDSDataset(root=tmpdir, split="train")
+
+        all_logits: list[torch.Tensor] = []
+        all_data = []
+        with torch.inference_mode():
+            for data in dataset:
+                logits = model(data)
+                all_logits.append(logits)
+                all_data.append(data)
+
+    meta["model"] = model_name
+    return build_graph_response(all_data, all_logits, meta, csv_path)
+
+
+def _sync_inference_temporal(
+    csv_path: str, model_name: str, model: BaseNIDSModel
+) -> dict[str, Any]:
+    """Inference pipeline for temporal models (TGAT/TGN)."""
+    import json
+    import tempfile
+
+    from app.services.graph_builder import build_graph_response
+    from src.data.static_builder import build_static_graphs
+    from src.data.static_dataset import StaticNIDSDataset
+
+    # Temporal models still need static graph structure for visualisation.
+    # Build static graphs and run inference through them — the temporal model
+    # processes each window's edges using its temporal attention.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        meta = build_static_graphs(
+            csv_path=csv_path,
+            output_dir=tmpdir,
+            window_size_s=60.0,
+            ratios=(1.0, 0.0, 0.0),
+        )
+        dataset = StaticNIDSDataset(root=tmpdir, split="train")
+
+        if hasattr(model, "reset_memory"):
+            model.reset_memory()
 
         all_logits: list[torch.Tensor] = []
         all_data = []
