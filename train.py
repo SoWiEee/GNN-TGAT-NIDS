@@ -13,7 +13,7 @@ from pathlib import Path
 
 import hydra
 import torch
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from torch_geometric.loader import DataLoader, TemporalDataLoader
 
 log = logging.getLogger(__name__)
@@ -294,16 +294,24 @@ def main(cfg: DictConfig) -> None:
         )
 
     # ── Model ────────────────────────────────────────────────────────────────
+    # Strip non-constructor keys that live in the model YAML but aren't
+    # __init__ parameters (loss config, memory_reset_policy, nested train).
+    _NON_MODEL_KEYS = {"loss", "memory_reset_policy", "train"}
+    model_cfg = OmegaConf.to_container(cfg.model, resolve=True)
+    for k in _NON_MODEL_KEYS:
+        model_cfg.pop(k, None)
+    model_cfg = OmegaConf.create(model_cfg)
+
     if is_temporal:
         model: torch.nn.Module = instantiate(
-            cfg.model,
+            model_cfg,
             num_nodes=num_nodes,
             raw_msg_dim=n_edge_feat,
             num_classes=n_classes,
         )
     else:
         model: torch.nn.Module = instantiate(
-            cfg.model,
+            model_cfg,
             in_node_channels=n_node_feat,
             in_edge_channels=n_edge_feat,
             num_classes=n_classes,

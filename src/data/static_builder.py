@@ -177,6 +177,9 @@ def _compute_node_features(df_window: pd.DataFrame, node2idx: dict[tuple, int]) 
         # np.add.at performs unbuffered in-place addition (handles repeated indices)
         np.add.at(node_feat[:, fi], src_idx[valid], vals[valid])
 
+    # log1p normalisation to tame extreme aggregated values (e.g. total bytes)
+    node_feat = np.sign(node_feat) * np.log1p(np.abs(node_feat))
+
     return torch.from_numpy(node_feat)
 
 

@@ -12,6 +12,7 @@ outputs/
 node_modules/
 CLAUDE.md
 .codegraph/
+.claude/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -1,0 +1,22 @@
+{
+  "graphsage": {
+    "clean_f1": 0.9712,
+    "dr_under_cpgd_eps01": 1.0,
+    "delta_f1_after_adv_training": null
+  },
+  "gat": {
+    "clean_f1": 0.9534,
+    "dr_under_cpgd_eps01": 1.0,
+    "delta_f1_after_adv_training": null
+  },
+  "tgat": {
+    "clean_f1": null,
+    "dr_under_cpgd_eps01": null,
+    "delta_f1_after_adv_training": null
+  },
+  "tgn": {
+    "clean_f1": null,
+    "dr_under_cpgd_eps01": null,
+    "delta_f1_after_adv_training": null
+  }
+}
