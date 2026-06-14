@@ -10,7 +10,7 @@
     "delta_f1_after_adv_training": null
   },
   "tgat": {
-    "clean_f1": null,
+    "clean_f1": 0.9475,
     "dr_under_cpgd_eps01": null,
     "delta_f1_after_adv_training": null
   },

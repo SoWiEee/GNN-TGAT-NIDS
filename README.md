@@ -322,11 +322,11 @@ GNN-NIDS-Analyzer/
 
 | Metric | GraphSAGE | GAT | TGAT | TGN |
 |--------|:---------:|:---:|:----:|:---:|
-| Weighted F1 (clean) | **0.9712** | **0.9534** | TBD | TBD |
+| Weighted F1 (clean) | **0.9712** | **0.9534** | **0.9475** | TBD |
 | DR@attack — C-PGD ε=0.1 | 1.0000 | 1.0000 | — | — |
 | ΔF1 after adversarial training | TBD | TBD | — | — |
 
-*Trained on NF-UNSW-NB15-v2 (~2M flows, 30 epochs, CPU). TGAT/TGN require GPU training. Run `scripts/compute_reliability_metrics.py` to update.*
+*Trained on NF-UNSW-NB15-v2 (~2M flows). Static models: 30 epochs on CPU; temporal models: 30 epochs on RTX 4070. Run `scripts/compute_reliability_metrics.py` to update.*
 
 ---
 
