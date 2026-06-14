@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import torch
-import pytest
 from torch_geometric.data import Data
 
 from src.attack.base import BaseAttack

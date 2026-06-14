@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import torch
-import pytest
 from torch_geometric.data import Data
 
 from src.attack.base import BaseAttack
-from src.attack.gan_generator import GANAttack, _Generator, _Critic
+from src.attack.gan_generator import GANAttack, _Critic, _Generator
 from src.models.graphsage import GraphSAGEModel
 
 NUM_NODES = 8

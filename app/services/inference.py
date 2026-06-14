@@ -112,7 +112,6 @@ def _sync_inference_temporal(
     csv_path: str, model_name: str, model: BaseNIDSModel
 ) -> dict[str, Any]:
     """Inference pipeline for temporal models (TGAT/TGN)."""
-    import json
     import tempfile
 
     from app.services.graph_builder import build_graph_response

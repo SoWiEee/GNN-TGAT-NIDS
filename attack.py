@@ -62,7 +62,6 @@ def main(cfg: DictConfig) -> None:
     target_split = cfg.attack.get("target_split", "test")
 
     if dataset_type == "temporal":
-        from torch_geometric.data import TemporalData
         from torch_geometric.loader import TemporalDataLoader
 
         processed_dir = Path(cfg.paths.data_processed) / "temporal"

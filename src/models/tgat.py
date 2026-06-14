@@ -307,22 +307,24 @@ class TGATModel(BaseNIDSModel):
 
     def _get_node_features(self, node_ids: Tensor, device: torch.device) -> Tensor:
         """Return running-average features for nodes."""
-        counts = self._node_counts[node_ids.cpu()].to(device).clamp(min=1).unsqueeze(-1)
-        feats = self._node_feats[node_ids.cpu()].to(device)
+        idx = node_ids.to(self._node_counts.device)
+        counts = self._node_counts[idx].to(device).clamp(min=1).unsqueeze(-1)
+        feats = self._node_feats[idx].to(device)
         return feats / counts
 
     def update_state(self, src: Tensor, dst: Tensor, t: Tensor, msg: Tensor) -> None:
         """Update neighbour loader and running node feature averages."""
         self.neighbor_loader.insert(src, dst, t, msg)
 
-        src_cpu = src.cpu()
-        dst_cpu = dst.cpu()
-        msg_cpu = msg.detach().cpu().float()
+        dev = self._node_feats.device
+        src_idx = src.to(dev)
+        dst_idx = dst.to(dev)
+        msg_dev = msg.detach().to(dev).float()
 
-        self._node_feats.data[src_cpu] += msg_cpu
-        self._node_feats.data[dst_cpu] += msg_cpu
-        self._node_counts.data[src_cpu] += 1
-        self._node_counts.data[dst_cpu] += 1
+        self._node_feats.data[src_idx] += msg_dev
+        self._node_feats.data[dst_idx] += msg_dev
+        self._node_counts.data[src_idx] += 1
+        self._node_counts.data[dst_idx] += 1
 
     def reset_memory(self) -> None:
         """Reset neighbour history and node features."""

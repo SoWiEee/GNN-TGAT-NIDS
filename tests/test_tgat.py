@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 import torch
-import pytest
 from torch_geometric.data import TemporalData
 
 from src.models.base import BaseNIDSModel
 from src.models.tgat import (
     LastNeighborLoader,
-    TGATModel,
     TemporalMultiHeadAttention,
+    TGATModel,
     TimeEncoder,
 )
 

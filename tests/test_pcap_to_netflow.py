@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pytest
 
-from scripts.pcap_to_netflow import _build_tcp_flags, _compute_derived, TCP_SYN, TCP_ACK, TCP_PSH
+from scripts.pcap_to_netflow import TCP_ACK, TCP_PSH, TCP_SYN, _build_tcp_flags, _compute_derived
 
 
 class TestBuildTCPFlags:
