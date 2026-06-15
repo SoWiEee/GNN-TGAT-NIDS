@@ -32,3 +32,11 @@ class AdversarialRequest(BaseModel):
 class ReportRequest(BaseModel):
     session_id: UUID
     graph_png_b64: str = ""  # base64 PNG from Cytoscape.js cy.png()
+
+
+class MemoryPoisoningRequest(BaseModel):
+    model: str = Field(default="tgn", pattern="^(tgn|tgat)$")
+    n_poison: int = Field(default=3, ge=0, le=20)
+    max_batches: int = Field(default=20, ge=1, le=200)
+    batch_size: int = Field(default=200, ge=10, le=2000)
+    poison_strategy: str = Field(default="benign_mean", pattern="^(benign_mean|random_benign)$")

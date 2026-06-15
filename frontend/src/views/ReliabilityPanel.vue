@@ -20,6 +20,12 @@
         class="model-card"
       >
         <h3>{{ String(modelName).toUpperCase() }}</h3>
+        <div class="metric-chips">
+          <span v-if="metrics.clean_precision != null">P {{ metrics.clean_precision.toFixed(3) }}</span>
+          <span v-if="metrics.clean_recall != null">R {{ metrics.clean_recall.toFixed(3) }}</span>
+          <span v-if="metrics.clean_macro_f1 != null">Macro {{ metrics.clean_macro_f1.toFixed(3) }}</span>
+          <span v-if="metrics.clean_roc_auc != null">AUC {{ metrics.clean_roc_auc.toFixed(3) }}</span>
+        </div>
 
         <div class="metric">
           <div class="metric-label">Clean F1</div>
@@ -51,6 +57,10 @@
                 ? metrics.dr_under_cpgd_eps01.toFixed(3)
                 : 'TBD'
             }}
+          </div>
+          <div v-if="metrics.cpgd_scope" class="metric-note">
+            {{ metrics.cpgd_scope === 'full_test' ? 'Full test split' : metrics.cpgd_scope }}
+            <span v-if="metrics.cpgd_attack_edges != null">· {{ metrics.cpgd_attack_edges }} attack edges</span>
           </div>
         </div>
 
@@ -114,6 +124,15 @@ onMounted(async () => {
   padding: 24px;
 }
 .model-card h3 { font-size: 15px; margin-bottom: 20px; color: #60a5fa; }
+.metric-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: -10px 0 18px; }
+.metric-chips span {
+  color: #cbd5e1;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+}
 .metric { margin-bottom: 18px; }
 .metric-label { font-size: 12px; color: #94a3b8; margin-bottom: 6px; }
 .metric-bar {
@@ -125,4 +144,5 @@ onMounted(async () => {
 }
 .metric-fill { height: 100%; border-radius: 4px; transition: width 0.6s ease; }
 .metric-value { font-size: 20px; font-weight: 700; }
+.metric-note { color: #94a3b8; font-size: 11px; margin-top: 4px; }
 </style>

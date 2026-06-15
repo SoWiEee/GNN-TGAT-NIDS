@@ -1,0 +1,40 @@
+{
+  "dataset": "demo",
+  "csv": "data/demo/demo_flows.csv",
+  "status": "ok",
+  "n_windows": 9,
+  "meta": {
+    "n_flows": null,
+    "n_features": 39,
+    "window_size_s": 120.0
+  },
+  "models": {
+    "graphsage": {
+      "clean_f1": null,
+      "clean_precision": null,
+      "clean_recall": null,
+      "clean_roc_auc": null,
+      "clean_macro_f1": null,
+      "status": "skipped",
+      "reason": "evaluation failed: mat1 and mat2 shapes cannot be multiplied (120x551 and 554x256)"
+    },
+    "gat": {
+      "clean_f1": null,
+      "clean_precision": null,
+      "clean_recall": null,
+      "clean_roc_auc": null,
+      "clean_macro_f1": null,
+      "status": "skipped",
+      "reason": "evaluation failed: mat1 and mat2 shapes cannot be multiplied (120x551 and 554x256)"
+    },
+    "ensemble": {
+      "clean_f1": null,
+      "clean_precision": null,
+      "clean_recall": null,
+      "clean_roc_auc": null,
+      "clean_macro_f1": null,
+      "status": "skipped",
+      "reason": "evaluation failed: mat1 and mat2 shapes cannot be multiplied (120x551 and 554x256)"
+    }
+  }
+}

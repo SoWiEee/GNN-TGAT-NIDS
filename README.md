@@ -426,15 +426,15 @@ GNN-NIDS-Analyzer/
 
 ## Model Reliability (Pre-computed on NF-UNSW-NB15-v2 test split)
 
-| Metric | GraphSAGE | GAT | TGAT | TGN |
-|--------|:---------:|:---:|:----:|:---:|
-| Weighted F1 (clean) | **0.9712** | **0.9534** | **0.9475** | **0.9463** |
-| Precision / Recall | 0.9792 / 0.9660 | 0.9729 / 0.9433 | 0.9632 / 0.9391 | 0.9610 / 0.9351 |
-| ROC-AUC | 0.9992 | 0.9963 | 0.9963 | 0.9960 |
-| DR@attack — C-PGD ε=0.1, 40 steps | 1.0000* | 1.0000* | — | — |
-| ΔF1 after adversarial training | +0.0041 | +0.0087 | — | — |
+| Metric | GraphSAGE | GAT | TGAT | TGN | Ensemble |
+|--------|:---------:|:---:|:----:|:---:|:---:|
+| Weighted F1 (clean) | **0.9712** | **0.9534** | **0.9475** | **0.9463** | **0.9670** |
+| Precision / Recall | 0.9792 / 0.9660 | 0.9729 / 0.9433 | 0.9632 / 0.9391 | 0.9610 / 0.9351 | 0.9783 / 0.9604 |
+| ROC-AUC | 0.9992 | 0.9963 | 0.9963 | 0.9960 | 0.9988 |
+| DR@attack — C-PGD ε=0.1, 40 steps | 1.0000 | 1.0000 | 1.0000* | 0.9989* | — |
+| ΔF1 after adversarial training | +0.0041 | +0.0087 | — | — | — |
 
-*Trained on NF-UNSW-NB15-v2 (~2M flows). Static and temporal clean metrics come from `data/metrics/reliability.json`. `*` C-PGD DR is sampled over 16 static test windows (GraphSAGE: 104 attack edges; GAT: 103 attack edges), not the full 3312-window static test split. Run `scripts/compute_reliability_metrics.py` without `--cpgd-max-windows` for full static C-PGD evaluation.*
+*Trained on NF-UNSW-NB15-v2 (~2M flows). Static C-PGD DR is a full 3312-window test sweep. `*` Temporal C-PGD DR is a bounded constrained run with 256 warm-up batches and 32 attacked test batches.*
 
 ---
 
@@ -464,11 +464,11 @@ GNN-NIDS-Analyzer/
 ## Future Work
 
 - **Learning rate scheduler** — Add cosine annealing or ReduceLROnPlateau to reduce late-training val_loss oscillation
-- **Cross-dataset validation** — Evaluate on CIC-IDS2017, CICIDS2018, and other NIDS benchmarks to test generalization
-- **Full adversarial reliability sweep** — Run full static-test C-PGD and define constrained temporal C-PGD before reporting TGAT/TGN adversarial DR
-- **Ensemble and per-class reporting** — Evaluate `model=ensemble`, add confusion matrices, and report per-class recall for minority attack classes
+- **Cross-dataset feature alignment** — Reuse the source feature schema/scaler or add adapters for datasets whose feature set differs from the current 42-feature checkpoints
+- **Full temporal adversarial sweep** — Run constrained temporal C-PGD over the complete temporal test split when sufficient compute is available
+- **Per-class reporting** — Add confusion matrices and per-class recall for minority attack classes
 - **Frontend enhancements** — Real-time attack timeline updates, model comparison dashboard, user-defined alert rules
-- **Memory Poisoning Attack visualization** — Visualize TGN memory poisoning effects in the web app
+- **Ensemble weighting** — Learn validation-based ensemble weights instead of unweighted soft voting
 
 ---
 

@@ -391,6 +391,7 @@ Routes:
 | `/timeline` | `AttackTimeline.vue` | Plotly attack timeline |
 | `/reliability` | `ReliabilityPanel.vue` | Precomputed metrics |
 | `/adversarial` | `AdversarialReport.vue` | C-PGD comparison and report export |
+| `/memory` | `MemoryPoisoningView.vue` | Temporal memory poisoning experiment visualization |
 
 `frontend/src/stores/session.ts` is the single Pinia store. It tracks session ID, status, progress, graph nodes/edges, alerts, timeline, reliability metrics, selected flow, and adversarial result. It polls `/status/{session_id}` every 2 seconds and stops on `ready` or `error`.
 
@@ -408,6 +409,7 @@ The current tracked metrics file is `data/metrics/reliability.json`.
 | GAT | 0.9534 | 0.9729 | 0.9433 | 0.9963 | Static clean metric |
 | TGAT | 0.9475 | 0.9632 | 0.9391 | 0.9963 | Temporal, 30 epochs |
 | TGN | 0.9463 | 0.9610 | 0.9351 | 0.9960 | Temporal, 30 epochs |
+| Ensemble | 0.9670 | 0.9783 | 0.9604 | 0.9988 | Static GraphSAGE+GAT soft vote |
 | GraphSAGE + adv training | 0.9753 | 0.9803 | 0.9727 | 0.9997 | C-PGD augmented training, eps=0.1, steps=10, ratio=0.3 |
 | GAT + adv training | 0.9622 | 0.9696 | 0.9581 | 0.9965 | C-PGD augmented training, eps=0.1, steps=10, ratio=0.3 |
 
@@ -415,10 +417,11 @@ Reliability C-PGD detection-rate metrics currently recorded:
 
 | Model | `dr_under_cpgd_eps01` | Scope |
 |---|---:|---|
-| GraphSAGE | 1.0000 | sampled static test windows: 16 windows, 104 attack edges |
-| GAT | 1.0000 | sampled static test windows: 16 windows, 103 attack edges |
-| TGAT | null | temporal C-PGD skipped |
-| TGN | null | temporal C-PGD skipped |
+| GraphSAGE | 1.0000 | full static test split: 3312 windows, 32804 attack edges, raw `ConstraintSet` projection |
+| GAT | 1.0000 | full static test split: 3312 windows, 35113 attack edges, raw `ConstraintSet` projection |
+| TGAT | 1.0000 | sampled temporal C-PGD: 32 test batches, 1896 attack edges, 256 warm-up batches |
+| TGN | 0.9989 | sampled temporal C-PGD: 32 test batches, 1896 attack edges, 256 warm-up batches |
+| Ensemble | null | clean-only static ensemble experiment |
 
 Reliability deltas currently recorded:
 
@@ -429,9 +432,34 @@ Reliability deltas currently recorded:
 | TGAT | null |
 | TGN | null |
 
-The static C-PGD detection-rate values are sampled because full-test C-PGD over
-3312 static test windows is expensive. Use `scripts/compute_reliability_metrics.py`
-without `--cpgd-max-windows` to run the full static test split.
+Static C-PGD is now a full-test sweep using batched window evaluation:
+
+```bash
+python scripts/compute_reliability_metrics.py \
+  --models graphsage,gat \
+  --steps 40 \
+  --static-batch-size 64 \
+  --include-ensemble
+```
+
+Temporal C-PGD is implemented as constrained message-space PGD with
+normalized clip bounds and an L-infinity budget. The recorded temporal DR is a
+bounded experiment, not a full 508010-event temporal sweep:
+
+```bash
+python scripts/compute_reliability_metrics.py \
+  --models tgat,tgn \
+  --attack-only \
+  --steps 40 \
+  --temporal-warmup-max-batches 256 \
+  --temporal-cpgd-max-batches 32
+```
+
+Cross-dataset validation is available through
+`scripts/cross_dataset_validation.py`. The tracked demo run uses
+`data/demo/demo_flows.csv`; it is marked skipped in
+`data/metrics/cross_dataset_validation.json` because the demo schema has 39
+features while the current static checkpoints expect the 42-feature pipeline.
 
 ---
 

@@ -70,8 +70,31 @@ export interface ReliabilityMetrics {
     cpgd_steps?: number | null
     cpgd_sample_windows?: number | null
     cpgd_attack_edges?: number | null
+    cpgd_scope?: string | null
+    cpgd_constraint?: string | null
     delta_f1_after_adv_training: number | null
   }
+}
+
+export interface MemoryPoisoningRow {
+  batch: number
+  events: number
+  attack_edges: number
+  evaded: number
+  poison_events: number
+  asr: number
+}
+
+export interface MemoryPoisoningResult {
+  model: string
+  n_poison: number
+  poison_strategy: string
+  batches: number
+  total_attack_edges: number
+  total_evaded: number
+  total_poison_events: number
+  asr: number
+  rows: MemoryPoisoningRow[]
 }
 
 export const api = {
@@ -116,5 +139,15 @@ export const api = {
 
   getMetrics(): Promise<AxiosResponse<ReliabilityMetrics>> {
     return apiClient.get('/metrics')
+  },
+
+  runMemoryPoisoning(params: {
+    model: string
+    n_poison: number
+    max_batches: number
+    batch_size: number
+    poison_strategy: string
+  }): Promise<AxiosResponse<MemoryPoisoningResult>> {
+    return apiClient.post('/memory-poisoning', params)
   },
 }

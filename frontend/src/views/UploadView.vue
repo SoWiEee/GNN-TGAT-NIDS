@@ -30,6 +30,7 @@
         <select v-model="selectedModel">
           <option value="gat">GAT (Graph Attention Network)</option>
           <option value="graphsage">GraphSAGE</option>
+          <option value="ensemble">Ensemble (GraphSAGE + GAT)</option>
           <option value="tgat">TGAT (Temporal Graph Attention)</option>
           <option value="tgn">TGN (Temporal Graph Network)</option>
         </select>

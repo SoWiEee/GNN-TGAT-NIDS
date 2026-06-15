@@ -5,6 +5,7 @@ import AlertList from '@/views/AlertList.vue'
 import AttackTimeline from '@/views/AttackTimeline.vue'
 import ReliabilityPanel from '@/views/ReliabilityPanel.vue'
 import AdversarialReport from '@/views/AdversarialReport.vue'
+import MemoryPoisoningView from '@/views/MemoryPoisoningView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -15,6 +16,7 @@ const router = createRouter({
     { path: '/timeline', component: AttackTimeline },
     { path: '/reliability', component: ReliabilityPanel },
     { path: '/adversarial', component: AdversarialReport },
+    { path: '/memory', component: MemoryPoisoningView },
   ],
 })
 

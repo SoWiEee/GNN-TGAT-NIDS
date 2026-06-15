@@ -10,6 +10,7 @@
           <router-link to="/timeline">Timeline</router-link>
           <router-link to="/reliability">Reliability</router-link>
           <router-link to="/adversarial">Adversarial</router-link>
+          <router-link to="/memory">Memory</router-link>
         </template>
       </div>
     </nav>

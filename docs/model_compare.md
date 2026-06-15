@@ -32,25 +32,28 @@ Latest results were found in `data/metrics/reliability.json` and Hydra training 
 | GAT | 0.9534 | 0.9729 | 0.9433 | 0.9963 | `data/metrics/reliability.json` |
 | TGAT | 0.9475 | 0.9632 | 0.9391 | 0.9963 | `outputs/2026-06-14/18-15-58/train.log` |
 | TGN | 0.9463 | 0.9610 | 0.9351 | 0.9960 | `data/metrics/reliability.json` |
+| Ensemble | 0.9670 | 0.9783 | 0.9604 | 0.9988 | `data/metrics/reliability.json` |
 | GraphSAGE + adversarial training | 0.9753 | 0.9803 | 0.9727 | 0.9997 | `outputs/2026-06-15/19-50-40/train.log` |
 | GAT + adversarial training | 0.9622 | 0.9696 | 0.9581 | 0.9965 | `outputs/2026-06-15/19-59-32/train.log` |
 
 Reliability file values:
 
-| Model | Clean F1 | DR under C-PGD eps=0.1 | Delta F1 after adversarial training |
-|---|---:|---:|---:|
-| GraphSAGE | 0.9712 | 1.0000 sampled | 0.0041 |
-| GAT | 0.9534 | 1.0000 sampled | 0.0087 |
-| TGAT | 0.9475 | null | null |
-| TGN | 0.9463 | null | null |
+| Model | Clean F1 | DR under C-PGD eps=0.1 | Scope | Delta F1 after adversarial training |
+|---|---:|---:|---|---:|
+| GraphSAGE | 0.9712 | 1.0000 | full static test, 3312 windows / 32804 attack edges | 0.0041 |
+| GAT | 0.9534 | 1.0000 | full static test, 3312 windows / 35113 attack edges | 0.0087 |
+| TGAT | 0.9475 | 1.0000 | sampled temporal, 32 test batches / 256 warm-up batches | null |
+| TGN | 0.9463 | 0.9989 | sampled temporal, 32 test batches / 256 warm-up batches | null |
+| Ensemble | 0.9670 | null | clean-only soft vote | null |
 
 Interpretation:
 
 - GraphSAGE is currently the strongest clean static model by recorded F1.
 - GAT is behind GraphSAGE on clean F1 but improves more from adversarial training in the metrics file.
+- The GraphSAGE+GAT ensemble improves over GAT and the temporal models, but still trails clean GraphSAGE.
 - TGAT and TGN have strong temporal results but do not beat the current clean GraphSAGE result.
 - Adversarial training improved both static models in the latest recorded experiments.
-- `dr_under_cpgd_eps01` is populated for static models using a fixed sample of 16 test windows. It should not be interpreted as full-test C-PGD robustness.
+- Static `dr_under_cpgd_eps01` is now a full-test sweep. Temporal DR is implemented with constrained message-space C-PGD, but the recorded run is bounded because full temporal replay is expensive.
 
 ---
 
@@ -191,16 +194,18 @@ Observations:
 | TGAT vs TGN | TGAT is slightly ahead: 0.9475 vs 0.9463. |
 | Static vs temporal | Static GraphSAGE currently outperforms TGAT/TGN on F1. |
 | Clean vs adversarial training | Static adversarial training improves F1 for both GraphSAGE and GAT. |
+| Static ensemble | Soft voting reaches 0.9670 F1, below GraphSAGE clean but above GAT/TGAT/TGN. |
 | Attention value | GAT/TGAT attention is useful architecturally, but not currently better than GraphSAGE on aggregate metrics. |
 
 Current ranking by recorded test F1:
 
 1. GraphSAGE + adversarial training: 0.9753
 2. GraphSAGE clean: 0.9712
-3. GAT + adversarial training: 0.9622
-4. GAT clean: 0.9534
-5. TGAT: 0.9475
-6. TGN: 0.9463
+3. Ensemble clean: 0.9670
+4. GAT + adversarial training: 0.9622
+5. GAT clean: 0.9534
+6. TGAT: 0.9475
+7. TGN: 0.9463
 
 ---
 
@@ -214,12 +219,12 @@ This document treats the 2026-06-14 and 2026-06-15 runs plus `data/metrics/relia
 
 ## 7. Recommended Next Experiments
 
-1. Run full static-test C-PGD without `--cpgd-max-windows` if an exact, non-sampled DR is required.
-2. Define and implement constrained temporal C-PGD before reporting TGAT/TGN adversarial DR.
+1. Run a full temporal C-PGD sweep if sufficient compute is available; the current temporal DR is a bounded run with 256 warm-up batches and 32 attacked test batches.
+2. Add feature-alignment or source-scaler reuse for cross-dataset validation. The tracked demo CSV run is skipped because its 39-feature schema does not match the current 42-feature checkpoints.
 3. Compare static 120-second offline training against 60-second web inference windows to quantify the deployment mismatch.
-4. Run ensemble evaluation and record whether soft voting improves over GraphSAGE alone.
-5. Add per-class recall and confusion matrices, because weighted F1 can hide poor minority attack-class behavior.
-6. Run repeated seeds for the top models to separate architecture effects from seed variance.
+4. Add per-class recall and confusion matrices, because weighted F1 can hide poor minority attack-class behavior.
+5. Run repeated seeds for the top models to separate architecture effects from seed variance.
+6. Evaluate ensemble weighting learned from validation metrics instead of unweighted soft voting.
 
 ---
 

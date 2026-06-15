@@ -27,6 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
+import torch.nn.functional as F
 from torch_geometric.loader import DataLoader, TemporalDataLoader
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
@@ -42,6 +43,7 @@ TEMPORAL_MODELS = ["tgat", "tgn"]
 MODEL_NAMES = STATIC_MODELS + TEMPORAL_MODELS
 CPGD_EPSILON = 0.1
 CPGD_STEPS = 40
+TEMPORAL_CLIP_SIGMA = 3.0
 
 
 def _empty_metrics() -> dict:
@@ -57,6 +59,8 @@ def _empty_metrics() -> dict:
         "cpgd_steps": None,
         "cpgd_sample_windows": None,
         "cpgd_attack_edges": None,
+        "cpgd_scope": None,
+        "cpgd_constraint": None,
         "delta_f1_after_adv_training": None,
     }
 
@@ -100,14 +104,23 @@ def _collect_metrics(all_true, all_pred, all_proba) -> dict[str, float]:
     return weighted
 
 
+def _as_probabilities(output: torch.Tensor) -> torch.Tensor:
+    row_sum = output.sum(dim=-1)
+    if bool((output >= 0).all()) and torch.allclose(
+        row_sum, torch.ones_like(row_sum), atol=1e-3, rtol=1e-3
+    ):
+        return output
+    return torch.softmax(output, dim=-1)
+
+
 def evaluate_clean(model, loader) -> dict[str, float]:
     """Return clean weighted and macro metrics on a static DataLoader."""
     all_true, all_pred, all_proba = [], [], []
     with torch.inference_mode():
         for data in loader:
             logits = model(data)
-            pred = logits.argmax(dim=-1)
-            proba = torch.softmax(logits, dim=-1)
+            proba = _as_probabilities(logits)
+            pred = proba.argmax(dim=-1)
             all_true.append(data.y_multi)
             all_pred.append(pred)
             all_proba.append(proba)
@@ -130,8 +143,8 @@ def evaluate_clean_temporal(model, train_loader, test_loader) -> dict[str, float
     with torch.inference_mode():
         for batch in test_loader:
             logits = model(batch)
-            pred = logits.argmax(dim=-1)
-            proba = torch.softmax(logits, dim=-1)
+            proba = _as_probabilities(logits)
+            pred = proba.argmax(dim=-1)
             all_true.append(batch.y)
             all_pred.append(pred)
             all_proba.append(proba)
@@ -140,10 +153,12 @@ def evaluate_clean_temporal(model, train_loader, test_loader) -> dict[str, float
 
 
 def _iter_with_limit(loader: Iterable, limit: int | None) -> Iterable:
-    for idx, data in enumerate(loader):
-        if limit is not None and idx >= limit:
+    seen = 0
+    for data in loader:
+        if limit is not None and seen >= limit:
             break
         yield data
+        seen += int(getattr(data, "num_graphs", 1))
 
 
 def evaluate_under_cpgd(
@@ -153,7 +168,13 @@ def evaluate_under_cpgd(
     steps: int,
     max_windows: int | None = None,
 ) -> dict[str, float | int | bool]:
-    """Return detection rate under C-PGD for static models."""
+    """Return detection rate under full/sampled C-PGD for static models.
+
+    This evaluator perturbs all attack-predicted edges in a window together,
+    then projects the batch through the same raw-space ConstraintSet used by
+    ``CPGDAttack``. It is intended for whole-split experiments where the
+    per-edge attack class would be prohibitively slow.
+    """
     from src.attack.cpgd import CPGDAttack
 
     scaler_path = PROCESSED_DIR / "scaler.json"
@@ -163,12 +184,12 @@ def evaluate_under_cpgd(
     still_detected = 0
     n_windows = 0
 
-    for data in _iter_with_limit(loader, max_windows):
-        n_windows += 1
+    for batch_idx, data in enumerate(_iter_with_limit(loader, max_windows), start=1):
+        n_windows += int(getattr(data, "num_graphs", 1))
         with torch.inference_mode():
             orig_preds = model(data).argmax(dim=-1)
 
-        adv_data = attacker.generate(model, data)
+        adv_data = _generate_static_cpgd_batch(model, data, attacker, epsilon, steps)
 
         with torch.inference_mode():
             adv_preds = model(adv_data).argmax(dim=-1)
@@ -181,6 +202,12 @@ def evaluate_under_cpgd(
         detected = int(((orig_preds > 0) & (adv_preds > 0)).sum())
         total_attack += n_attack
         still_detected += detected
+        if batch_idx == 1 or batch_idx % 10 == 0:
+            logger.info(
+                "  C-PGD progress: %d windows, %d attack edges",
+                n_windows,
+                total_attack,
+            )
 
     if total_attack == 0:
         dr = 0.0
@@ -191,47 +218,92 @@ def evaluate_under_cpgd(
         "sampled": max_windows is not None,
         "sample_windows": n_windows,
         "attack_edges": total_attack,
+        "constraint": "raw_constraint_set",
     }
 
 
-def evaluate_under_cpgd_temporal(
-    model, train_loader, test_loader, epsilon: float, steps: int,
-) -> float:
-    """Return detection rate under C-PGD for temporal models.
-
-    Perturbs edge features (msg) on test batches after warming memory on train.
-    """
-    model.reset_memory()
+def _generate_static_cpgd_batch(model, data, attacker, epsilon: float, steps: int):
+    """Vectorised equivalent of ``CPGDAttack.generate`` for one static graph."""
     with torch.no_grad():
-        for batch in train_loader:
+        orig_preds = model(data).argmax(dim=-1)
+    attack_idx = (orig_preds > 0).nonzero(as_tuple=True)[0]
+    if len(attack_idx) == 0:
+        return data
+
+    alpha = epsilon / max(steps, 1) * 2.5
+    x_all = data.edge_attr.detach()
+    x_orig = x_all[attack_idx].clone()
+    x_adv = x_orig + torch.empty_like(x_orig).uniform_(-epsilon, epsilon)
+    x_adv = x_adv.clamp(x_orig - epsilon, x_orig + epsilon)
+    target = torch.zeros(len(attack_idx), dtype=torch.long, device=x_all.device)
+
+    for _ in range(steps):
+        x_adv = x_adv.detach().requires_grad_(True)
+        edge_attr_mod = x_all.clone()
+        edge_attr_mod[attack_idx] = x_adv
+        mod_data = data.clone()
+        mod_data.edge_attr = edge_attr_mod
+
+        logits = model(mod_data)[attack_idx]
+        loss = F.cross_entropy(logits, target)
+        loss.backward()
+        grad = x_adv.grad
+        if grad is None:
+            break
+
+        grad_norm = grad.flatten(1).norm(p=2, dim=1).clamp_min(1e-8).unsqueeze(1)
+        x_next = (x_adv + alpha * grad / grad_norm).detach()
+        x_raw = attacker._inverse_transform(x_next.cpu().numpy())
+        x_raw = attacker.cs.project(x_raw)
+        x_next = torch.from_numpy(attacker._transform(x_raw)).float().to(x_all.device)
+        x_adv = x_next.clamp(x_orig - epsilon, x_orig + epsilon)
+
+    adv_data = data.clone()
+    edge_attr = x_all.clone()
+    edge_attr[attack_idx] = x_adv.detach()
+    adv_data.edge_attr = edge_attr
+    return adv_data
+
+
+def evaluate_under_cpgd_temporal(
+    model,
+    train_loader,
+    test_loader,
+    epsilon: float,
+    steps: int,
+    max_batches: int | None = None,
+    warmup_max_batches: int | None = None,
+) -> dict[str, float | int | bool | None | str]:
+    """Return detection rate under constrained temporal C-PGD."""
+    from src.attack.temporal_cpgd import ConstrainedTemporalCPGDAttack
+
+    attacker = ConstrainedTemporalCPGDAttack(
+        epsilon=epsilon,
+        steps=steps,
+        clip_min=-TEMPORAL_CLIP_SIGMA,
+        clip_max=TEMPORAL_CLIP_SIGMA,
+    )
+    model.reset_memory()
+    warmup_batches = 0
+    with torch.no_grad():
+        for batch in _iter_with_limit(train_loader, warmup_max_batches):
+            warmup_batches += 1
             model(batch)
             model.update_state(batch.src, batch.dst, batch.t, batch.msg)
 
     total_attack = 0
     still_detected = 0
+    n_batches = 0
 
-    for batch in test_loader:
+    for batch in _iter_with_limit(test_loader, max_batches):
+        n_batches += 1
         with torch.inference_mode():
             orig_preds = model(batch).argmax(dim=-1)
 
-        msg_orig = batch.msg.clone()
-        batch.msg.requires_grad_(True)
-
-        for _ in range(steps):
-            logits = model(batch)
-            loss = -torch.nn.functional.cross_entropy(logits, orig_preds)
-            loss.backward()
-            with torch.no_grad():
-                batch.msg.data = batch.msg.data - epsilon / steps * batch.msg.grad.sign()
-                delta = batch.msg.data - msg_orig
-                delta.clamp_(-epsilon, epsilon)
-                batch.msg.data = msg_orig + delta
-            batch.msg.grad.zero_()
-
-        batch.msg.requires_grad_(False)
+        adv_batch = attacker.generate(model, batch)
 
         with torch.inference_mode():
-            adv_preds = model(batch).argmax(dim=-1)
+            adv_preds = model(adv_batch).argmax(dim=-1)
 
         attack_mask = orig_preds > 0
         n_attack = int(attack_mask.sum())
@@ -241,10 +313,28 @@ def evaluate_under_cpgd_temporal(
         detected = int(((orig_preds > 0) & (adv_preds > 0)).sum())
         total_attack += n_attack
         still_detected += detected
+        if n_batches == 1 or n_batches % 10 == 0:
+            logger.info(
+                "  Temporal C-PGD progress: %d batches, %d attack edges",
+                n_batches,
+                total_attack,
+            )
 
     if total_attack == 0:
-        return 0.0
-    return round(still_detected / total_attack, 4)
+        dr = 0.0
+    else:
+        dr = still_detected / total_attack
+    return {
+        "dr": round(dr, 4),
+        "sampled": max_batches is not None,
+        "sample_windows": n_batches if max_batches is not None else None,
+        "attack_edges": total_attack,
+        "constraint": (
+            "normalized_clip_and_linf"
+            if warmup_max_batches is None
+            else f"normalized_clip_and_linf,warmup_batches={warmup_batches}"
+        ),
+    }
 
 
 def main() -> None:
@@ -279,14 +369,44 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--static-batch-size", type=int, default=16,
+        help="Static graph DataLoader batch size for clean and C-PGD evaluation.",
+    )
+    parser.add_argument(
+        "--temporal-cpgd-max-batches", type=int, default=None,
+        help="Optional cap for temporal C-PGD batches.",
+    )
+    parser.add_argument(
+        "--temporal-warmup-max-batches", type=int, default=None,
+        help="Optional cap for train batches used to warm temporal memory before C-PGD.",
+    )
+    parser.add_argument(
         "--skip-temporal-cpgd", action="store_true",
         help="Leave temporal dr_under_cpgd_eps01 as null; compute clean temporal metrics only.",
+    )
+    parser.add_argument(
+        "--include-ensemble", action="store_true",
+        help="Add a soft-vote static ensemble clean-metric experiment.",
+    )
+    parser.add_argument(
+        "--models",
+        default=",".join(MODEL_NAMES),
+        help="Comma-separated model list to update, e.g. graphsage,gat or tgat,tgn.",
+    )
+    parser.add_argument(
+        "--attack-only",
+        action="store_true",
+        help="Reuse existing clean metrics and update only C-PGD fields for selected models.",
     )
     args = parser.parse_args()
 
     processed_dir = Path(args.processed_dir)
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    selected_models = [m.strip() for m in args.models.split(",") if m.strip()]
+    unknown = sorted(set(selected_models) - set(MODEL_NAMES))
+    if unknown:
+        raise ValueError(f"Unknown model(s): {unknown}")
 
     # ── Static data ──────────────────────────────────────────────────────────
     static_available = (processed_dir / "meta.json").exists()
@@ -294,7 +414,7 @@ def main() -> None:
     if static_available:
         from src.data.static_dataset import StaticNIDSDataset
         test_ds = StaticNIDSDataset(processed_dir, split="test")
-        test_loader = DataLoader(test_ds, batch_size=1, shuffle=False)
+        test_loader = DataLoader(test_ds, batch_size=args.static_batch_size, shuffle=False)
         logger.info("Static test split: %d windows", len(test_ds))
     else:
         logger.warning("Static processed data not found at %s", processed_dir)
@@ -312,9 +432,12 @@ def main() -> None:
     else:
         logger.warning("Temporal processed data not found at %s", TEMPORAL_DIR)
 
-    results: dict[str, dict] = {}
+    if output_path.exists():
+        results: dict[str, dict] = json.loads(output_path.read_text())
+    else:
+        results = {}
 
-    for name in MODEL_NAMES:
+    for name in selected_models:
         model = load_model(name)
         if model is None:
             results[name] = _empty_metrics()
@@ -322,30 +445,35 @@ def main() -> None:
 
         is_temporal = name in TEMPORAL_MODELS
 
-        # ── Clean F1 ────────────────────────────────────────────────────────
-        logger.info("[%s] Computing clean F1 …", name)
-        if is_temporal and temporal_available:
-            clean_metrics = evaluate_clean_temporal(
-                model, temporal_train_loader, temporal_test_loader
-            )
-        elif not is_temporal and static_available:
-            clean_metrics = evaluate_clean(model, test_loader)
+        clean_metrics = None
+        if args.attack_only and name in results:
+            result = {**_empty_metrics(), **results[name]}
+            logger.info("[%s] Reusing existing clean metrics", name)
         else:
-            logger.warning("[%s] No matching data — skipping", name)
-            results[name] = _empty_metrics()
-            continue
+            # ── Clean F1 ────────────────────────────────────────────────────
+            logger.info("[%s] Computing clean F1 …", name)
+            if is_temporal and temporal_available:
+                clean_metrics = evaluate_clean_temporal(
+                    model, temporal_train_loader, temporal_test_loader
+                )
+            elif not is_temporal and static_available:
+                clean_metrics = evaluate_clean(model, test_loader)
+            else:
+                logger.warning("[%s] No matching data — skipping", name)
+                results[name] = _empty_metrics()
+                continue
 
-        result = _empty_metrics()
-        result.update(_format_metrics(clean_metrics))
-        logger.info(
-            "[%s] clean: f1=%.4f precision=%.4f recall=%.4f roc_auc=%.4f macro_f1=%.4f",
-            name,
-            result["clean_f1"] or 0.0,
-            result["clean_precision"] or 0.0,
-            result["clean_recall"] or 0.0,
-            result["clean_roc_auc"] or 0.0,
-            result["clean_macro_f1"] or 0.0,
-        )
+            result = _empty_metrics()
+            result.update(_format_metrics(clean_metrics))
+            logger.info(
+                "[%s] clean: f1=%.4f precision=%.4f recall=%.4f roc_auc=%.4f macro_f1=%.4f",
+                name,
+                result["clean_f1"] or 0.0,
+                result["clean_precision"] or 0.0,
+                result["clean_recall"] or 0.0,
+                result["clean_roc_auc"] or 0.0,
+                result["clean_macro_f1"] or 0.0,
+            )
 
         # ── DR under C-PGD ──────────────────────────────────────────────────
         logger.info(
@@ -357,16 +485,11 @@ def main() -> None:
                 logger.info("[%s] Temporal C-PGD skipped by request", name)
                 dr_meta = None
             elif temporal_available:
-                dr = evaluate_under_cpgd_temporal(
+                dr_meta = evaluate_under_cpgd_temporal(
                     model, temporal_train_loader, temporal_test_loader,
-                    args.epsilon, args.steps,
+                    args.epsilon, args.steps, args.temporal_cpgd_max_batches,
+                    args.temporal_warmup_max_batches,
                 )
-                dr_meta = {
-                    "dr": dr,
-                    "sampled": False,
-                    "sample_windows": None,
-                    "attack_edges": None,
-                }
             else:
                 dr_meta = None
         else:
@@ -380,12 +503,14 @@ def main() -> None:
             result["cpgd_steps"] = args.steps
             result["cpgd_sample_windows"] = dr_meta["sample_windows"]
             result["cpgd_attack_edges"] = dr_meta["attack_edges"]
+            result["cpgd_scope"] = "sampled" if dr_meta["sampled"] else "full_test"
+            result["cpgd_constraint"] = dr_meta.get("constraint")
             logger.info("[%s] dr_under_cpgd_eps01 = %.4f", name, dr_meta["dr"])
         results[name] = result
 
         # ── Adversarially-trained checkpoint (optional) ──────────────────────
         adv_path = Path(args.checkpoints_dir) / f"{name}_adv_best.pt"
-        if adv_path.exists() and adv_path.stat().st_size > 0:
+        if not args.attack_only and adv_path.exists() and adv_path.stat().st_size > 0:
             logger.info("[%s] Adversarially-trained checkpoint found — computing ΔF1 …", name)
             adv_model = torch.load(adv_path, map_location="cpu", weights_only=False)
             adv_model.eval()
@@ -402,6 +527,27 @@ def main() -> None:
             logger.info("[%s] ΔF1 = %+.4f (%.4f → %.4f)", name, delta, clean_f1, adv_f1)
         elif adv_path.exists():
             logger.warning("[%s] Ignoring empty adversarial checkpoint: %s", name, adv_path)
+
+    if args.include_ensemble and static_available:
+        from src.models.ensemble import EnsembleModel
+
+        ensemble_models = {
+            name: load_model(name)
+            for name in STATIC_MODELS
+            if (Path(args.checkpoints_dir) / f"{name}_best.pt").exists()
+        }
+        ensemble_models = {k: v for k, v in ensemble_models.items() if v is not None}
+        if len(ensemble_models) >= 2:
+            logger.info("[ensemble] Computing static soft-vote clean metrics …")
+            ensemble = EnsembleModel(ensemble_models, strategy="soft_vote")
+            clean_metrics = evaluate_clean(ensemble, test_loader)
+            result = _empty_metrics()
+            result.update(_format_metrics(clean_metrics))
+            result["cpgd_scope"] = "not_applicable"
+            result["cpgd_constraint"] = "ensemble_clean_only"
+            results["ensemble"] = result
+        else:
+            logger.warning("[ensemble] Need at least two static checkpoints; skipping")
 
     output_path.write_text(json.dumps(results, indent=2))
     logger.info("Reliability metrics saved → %s", output_path)
