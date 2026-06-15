@@ -25,7 +25,7 @@ from src.data.static_dataset import StaticNIDSDataset
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 logger = logging.getLogger(__name__)
 
-MODELS = ["graphsage", "gat"]
+MODELS = ["graphsage", "gat", "egraphsage"]
 RAW_CSV = Path("data/raw/NF-UNSW-NB15-v2.csv")
 OUTPUT_PATH = Path("data/metrics/window_size_eval.json")
 

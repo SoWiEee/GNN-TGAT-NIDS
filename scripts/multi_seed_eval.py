@@ -25,7 +25,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 logger = logging.getLogger(__name__)
 
 DEFAULT_SEEDS = [42, 123, 456, 789, 1024]
-STATIC_MODELS = ["graphsage", "gat"]
+STATIC_MODELS = ["graphsage", "gat", "egraphsage"]
 TEMPORAL_MODELS = ["tgat", "tgn"]
 OUTPUT_PATH = Path("data/metrics/multi_seed_eval.json")
 

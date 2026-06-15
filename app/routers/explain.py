@@ -19,13 +19,13 @@ TEMPORAL_MODELS = {"tgat", "tgn"}
 
 
 class ExplainRequest(BaseModel):
-    model: str = Field(default="graphsage", pattern="^(graphsage|gat|tgat|tgn)$")
+    model: str = Field(default="graphsage", pattern="^(graphsage|gat|egraphsage|tgat|tgn)$")
     edge_idx: int = Field(ge=0)
     epochs: int = Field(default=200, ge=10, le=1000)
 
 
 class ExplainTopRequest(BaseModel):
-    model: str = Field(default="graphsage", pattern="^(graphsage|gat|tgat|tgn)$")
+    model: str = Field(default="graphsage", pattern="^(graphsage|gat|egraphsage|tgat|tgn)$")
     top_k: int = Field(default=5, ge=1, le=20)
     epochs: int = Field(default=200, ge=10, le=1000)
 

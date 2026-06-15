@@ -30,7 +30,7 @@ from src.models.ensemble import EnsembleModel
 
 logger = logging.getLogger(__name__)
 
-STATIC_MODELS = ["graphsage", "gat"]
+STATIC_MODELS = ["graphsage", "gat", "egraphsage"]
 PROCESSED_DIR = Path("data/processed/static")
 
 

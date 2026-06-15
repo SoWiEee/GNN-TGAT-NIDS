@@ -1,4 +1,4 @@
-"""Tests for GraphSAGE and GAT edge classifiers."""
+"""Tests for GraphSAGE, GAT, and E-GraphSAGE edge classifiers."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import torch
 from torch_geometric.data import Data
 
 from src.models.base import BaseNIDSModel
+from src.models.egraphsage import EGraphSAGEModel
 from src.models.gat import GATModel
 from src.models.graphsage import GraphSAGEModel
 
@@ -55,6 +56,18 @@ def gat_model():
     )
 
 
+@pytest.fixture
+def egraphsage_model():
+    return EGraphSAGEModel(
+        in_node_channels=IN_NODE,
+        in_edge_channels=IN_EDGE,
+        hidden_dim=HIDDEN,
+        num_classes=NUM_CLASSES,
+        num_layers=3,
+        dropout=0.0,
+    )
+
+
 # ── Inheritance ───────────────────────────────────────────────────────────────
 
 class TestInheritance:
@@ -63,6 +76,9 @@ class TestInheritance:
 
     def test_gat_is_base_nids_model(self, gat_model):
         assert isinstance(gat_model, BaseNIDSModel)
+
+    def test_egraphsage_is_base_nids_model(self, egraphsage_model):
+        assert isinstance(egraphsage_model, BaseNIDSModel)
 
 
 # ── Output shape ──────────────────────────────────────────────────────────────
@@ -88,6 +104,16 @@ class TestOutputShape:
         logits = gat_model(data)
         assert logits.shape == (1, NUM_CLASSES)
 
+    def test_egraphsage_logits_shape(self, egraphsage_model):
+        data = _make_data()
+        logits = egraphsage_model(data)
+        assert logits.shape == (NUM_EDGES, NUM_CLASSES)
+
+    def test_egraphsage_single_edge(self, egraphsage_model):
+        data = _make_data(n_nodes=2, n_edges=1)
+        logits = egraphsage_model(data)
+        assert logits.shape == (1, NUM_CLASSES)
+
 
 # ── predict_edges / predict_proba ─────────────────────────────────────────────
 
@@ -108,6 +134,12 @@ class TestPredictHelpers:
         data = _make_data()
         preds = gat_model.predict_edges(data)
         assert preds.shape == (NUM_EDGES,)
+
+    def test_egraphsage_predict_proba_sums_to_one(self, egraphsage_model):
+        data = _make_data()
+        proba = egraphsage_model.predict_proba(data)
+        assert proba.shape == (NUM_EDGES, NUM_CLASSES)
+        torch.testing.assert_close(proba.sum(dim=-1), torch.ones(NUM_EDGES))
 
     def test_predict_edges_no_grad(self, sage_model):
         """predict_edges must not accumulate gradients."""
@@ -134,6 +166,14 @@ class TestGradientFlow:
         loss = logits.sum()
         loss.backward()
         has_grad = any(p.grad is not None for p in gat_model.parameters())
+        assert has_grad
+
+    def test_egraphsage_backward(self, egraphsage_model):
+        data = _make_data()
+        logits = egraphsage_model(data)
+        loss = logits.sum()
+        loss.backward()
+        has_grad = any(p.grad is not None for p in egraphsage_model.parameters())
         assert has_grad
 
 
@@ -178,4 +218,11 @@ class TestTrainEvalMode:
         data = _make_data()
         out1 = gat_model(data)
         out2 = gat_model(data)
+        torch.testing.assert_close(out1, out2)
+
+    def test_egraphsage_deterministic_in_eval_mode(self, egraphsage_model):
+        egraphsage_model.eval()
+        data = _make_data()
+        out1 = egraphsage_model(data)
+        out2 = egraphsage_model(data)
         torch.testing.assert_close(out1, out2)

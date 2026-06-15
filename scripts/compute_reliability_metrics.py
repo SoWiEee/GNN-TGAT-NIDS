@@ -38,7 +38,7 @@ TEMPORAL_DIR = Path("data/processed/temporal")
 CHECKPOINTS_DIR = Path("checkpoints")
 OUTPUT_PATH = Path("data/metrics/reliability.json")
 
-STATIC_MODELS = ["graphsage", "gat"]
+STATIC_MODELS = ["graphsage", "gat", "egraphsage"]
 TEMPORAL_MODELS = ["tgat", "tgn"]
 MODEL_NAMES = STATIC_MODELS + TEMPORAL_MODELS
 CPGD_EPSILON = 0.1

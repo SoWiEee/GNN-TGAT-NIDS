@@ -30,6 +30,7 @@ CHECKPOINTS_DIR = Path("checkpoints")
 CHECKPOINT_FILES = {
     "graphsage": CHECKPOINTS_DIR / "graphsage_best.pt",
     "gat": CHECKPOINTS_DIR / "gat_best.pt",
+    "egraphsage": CHECKPOINTS_DIR / "egraphsage_best.pt",
     "tgat": CHECKPOINTS_DIR / "tgat_best.pt",
     "tgn": CHECKPOINTS_DIR / "tgn_best.pt",
 }
