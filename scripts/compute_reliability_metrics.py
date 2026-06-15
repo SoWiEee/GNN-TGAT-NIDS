@@ -6,6 +6,10 @@ Run once after training is complete:
 
 Metrics written per model:
     clean_f1                    — weighted F1 on NF-UNSW-NB15-v2 test split
+    clean_precision             — weighted precision on the test split
+    clean_recall                — weighted recall on the test split
+    clean_roc_auc               — weighted multiclass ROC-AUC on the test split
+    clean_macro_f1              — macro F1 on the test split
     dr_under_cpgd_eps01         — detection rate after C-PGD attack (ε=0.1, 40 steps)
     delta_f1_after_adv_training — improvement after adversarial training (optional)
 
@@ -17,6 +21,7 @@ import argparse
 import json
 import logging
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -39,6 +44,39 @@ CPGD_EPSILON = 0.1
 CPGD_STEPS = 40
 
 
+def _empty_metrics() -> dict:
+    return {
+        "clean_f1": None,
+        "clean_precision": None,
+        "clean_recall": None,
+        "clean_roc_auc": None,
+        "clean_macro_f1": None,
+        "dr_under_cpgd_eps01": None,
+        "dr_under_cpgd_eps01_sampled": None,
+        "cpgd_epsilon": None,
+        "cpgd_steps": None,
+        "cpgd_sample_windows": None,
+        "cpgd_attack_edges": None,
+        "delta_f1_after_adv_training": None,
+    }
+
+
+def _round_metric(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return round(float(value), 4)
+
+
+def _format_metrics(metrics: dict[str, float]) -> dict:
+    return {
+        "clean_f1": _round_metric(metrics.get("f1")),
+        "clean_precision": _round_metric(metrics.get("precision")),
+        "clean_recall": _round_metric(metrics.get("recall")),
+        "clean_roc_auc": _round_metric(metrics.get("roc_auc")),
+        "clean_macro_f1": _round_metric(metrics.get("macro_f1")),
+    }
+
+
 def load_model(name: str) -> torch.nn.Module | None:
     path = CHECKPOINTS_DIR / f"{name}_best.pt"
     if not path.exists():
@@ -50,10 +88,20 @@ def load_model(name: str) -> torch.nn.Module | None:
     return model
 
 
-def evaluate_clean(model, loader) -> float:
-    """Return weighted F1 on a static DataLoader."""
+def _collect_metrics(all_true, all_pred, all_proba) -> dict[str, float]:
     from src.eval.metrics import compute_metrics
 
+    y_true = torch.cat(all_true)
+    y_pred = torch.cat(all_pred)
+    y_proba = torch.cat(all_proba)
+    weighted = compute_metrics(y_true, y_pred, y_proba, average="weighted")
+    macro = compute_metrics(y_true, y_pred, y_proba, average="macro")
+    weighted["macro_f1"] = macro["f1"]
+    return weighted
+
+
+def evaluate_clean(model, loader) -> dict[str, float]:
+    """Return clean weighted and macro metrics on a static DataLoader."""
     all_true, all_pred, all_proba = [], [], []
     with torch.inference_mode():
         for data in loader:
@@ -64,18 +112,14 @@ def evaluate_clean(model, loader) -> float:
             all_pred.append(pred)
             all_proba.append(proba)
 
-    metrics = compute_metrics(
-        torch.cat(all_true),
-        torch.cat(all_pred),
-        torch.cat(all_proba),
-    )
-    return round(float(metrics["f1"]), 4)
+    return _collect_metrics(all_true, all_pred, all_proba)
 
 
-def evaluate_clean_temporal(model, train_loader, test_loader) -> float:
-    """Return weighted F1 for temporal models. Replays train to warm memory."""
-    from src.eval.metrics import compute_metrics
+def evaluate_clean_temporal(model, train_loader, test_loader) -> dict[str, float]:
+    """Return clean weighted and macro metrics for temporal models.
 
+    Replays train to warm memory before evaluating the test split.
+    """
     model.reset_memory()
     with torch.no_grad():
         for batch in train_loader:
@@ -92,15 +136,23 @@ def evaluate_clean_temporal(model, train_loader, test_loader) -> float:
             all_pred.append(pred)
             all_proba.append(proba)
 
-    metrics = compute_metrics(
-        torch.cat(all_true),
-        torch.cat(all_pred),
-        torch.cat(all_proba),
-    )
-    return round(float(metrics["f1"]), 4)
+    return _collect_metrics(all_true, all_pred, all_proba)
 
 
-def evaluate_under_cpgd(model, loader, epsilon: float, steps: int) -> float:
+def _iter_with_limit(loader: Iterable, limit: int | None) -> Iterable:
+    for idx, data in enumerate(loader):
+        if limit is not None and idx >= limit:
+            break
+        yield data
+
+
+def evaluate_under_cpgd(
+    model,
+    loader,
+    epsilon: float,
+    steps: int,
+    max_windows: int | None = None,
+) -> dict[str, float | int | bool]:
     """Return detection rate under C-PGD for static models."""
     from src.attack.cpgd import CPGDAttack
 
@@ -109,8 +161,10 @@ def evaluate_under_cpgd(model, loader, epsilon: float, steps: int) -> float:
 
     total_attack = 0
     still_detected = 0
+    n_windows = 0
 
-    for data in loader:
+    for data in _iter_with_limit(loader, max_windows):
+        n_windows += 1
         with torch.inference_mode():
             orig_preds = model(data).argmax(dim=-1)
 
@@ -129,8 +183,15 @@ def evaluate_under_cpgd(model, loader, epsilon: float, steps: int) -> float:
         still_detected += detected
 
     if total_attack == 0:
-        return 0.0
-    return round(still_detected / total_attack, 4)
+        dr = 0.0
+    else:
+        dr = still_detected / total_attack
+    return {
+        "dr": round(dr, 4),
+        "sampled": max_windows is not None,
+        "sample_windows": n_windows,
+        "attack_edges": total_attack,
+    }
 
 
 def evaluate_under_cpgd_temporal(
@@ -210,6 +271,17 @@ def main() -> None:
         "--steps", type=int, default=CPGD_STEPS,
         help="C-PGD steps",
     )
+    parser.add_argument(
+        "--cpgd-max-windows", type=int, default=None,
+        help=(
+            "Optional cap for static C-PGD evaluation windows. "
+            "Useful because full-test C-PGD is expensive."
+        ),
+    )
+    parser.add_argument(
+        "--skip-temporal-cpgd", action="store_true",
+        help="Leave temporal dr_under_cpgd_eps01 as null; compute clean temporal metrics only.",
+    )
     args = parser.parse_args()
 
     processed_dir = Path(args.processed_dir)
@@ -245,11 +317,7 @@ def main() -> None:
     for name in MODEL_NAMES:
         model = load_model(name)
         if model is None:
-            results[name] = {
-                "clean_f1": None,
-                "dr_under_cpgd_eps01": None,
-                "delta_f1_after_adv_training": None,
-            }
+            results[name] = _empty_metrics()
             continue
 
         is_temporal = name in TEMPORAL_MODELS
@@ -257,53 +325,83 @@ def main() -> None:
         # ── Clean F1 ────────────────────────────────────────────────────────
         logger.info("[%s] Computing clean F1 …", name)
         if is_temporal and temporal_available:
-            clean_f1 = evaluate_clean_temporal(model, temporal_train_loader, temporal_test_loader)
+            clean_metrics = evaluate_clean_temporal(
+                model, temporal_train_loader, temporal_test_loader
+            )
         elif not is_temporal and static_available:
-            clean_f1 = evaluate_clean(model, test_loader)
+            clean_metrics = evaluate_clean(model, test_loader)
         else:
             logger.warning("[%s] No matching data — skipping", name)
-            results[name] = {
-                "clean_f1": None, "dr_under_cpgd_eps01": None,
-                "delta_f1_after_adv_training": None,
-            }
+            results[name] = _empty_metrics()
             continue
-        logger.info("[%s] clean_f1 = %.4f", name, clean_f1)
+
+        result = _empty_metrics()
+        result.update(_format_metrics(clean_metrics))
+        logger.info(
+            "[%s] clean: f1=%.4f precision=%.4f recall=%.4f roc_auc=%.4f macro_f1=%.4f",
+            name,
+            result["clean_f1"] or 0.0,
+            result["clean_precision"] or 0.0,
+            result["clean_recall"] or 0.0,
+            result["clean_roc_auc"] or 0.0,
+            result["clean_macro_f1"] or 0.0,
+        )
 
         # ── DR under C-PGD ──────────────────────────────────────────────────
         logger.info(
             "[%s] Computing DR under C-PGD (ε=%.2f, steps=%d) …",
             name, args.epsilon, args.steps,
         )
-        if is_temporal and temporal_available:
-            dr = evaluate_under_cpgd_temporal(
-                model, temporal_train_loader, temporal_test_loader,
-                args.epsilon, args.steps,
-            )
+        if is_temporal:
+            if args.skip_temporal_cpgd:
+                logger.info("[%s] Temporal C-PGD skipped by request", name)
+                dr_meta = None
+            elif temporal_available:
+                dr = evaluate_under_cpgd_temporal(
+                    model, temporal_train_loader, temporal_test_loader,
+                    args.epsilon, args.steps,
+                )
+                dr_meta = {
+                    "dr": dr,
+                    "sampled": False,
+                    "sample_windows": None,
+                    "attack_edges": None,
+                }
+            else:
+                dr_meta = None
         else:
-            dr = evaluate_under_cpgd(model, test_loader, args.epsilon, args.steps)
-        logger.info("[%s] dr_under_cpgd_eps01 = %.4f", name, dr)
-
-        results[name] = {
-            "clean_f1": clean_f1,
-            "dr_under_cpgd_eps01": dr,
-            "delta_f1_after_adv_training": None,
-        }
+            dr_meta = evaluate_under_cpgd(
+                model, test_loader, args.epsilon, args.steps, args.cpgd_max_windows
+            )
+        if dr_meta is not None:
+            result["dr_under_cpgd_eps01"] = dr_meta["dr"]
+            result["dr_under_cpgd_eps01_sampled"] = dr_meta["sampled"]
+            result["cpgd_epsilon"] = args.epsilon
+            result["cpgd_steps"] = args.steps
+            result["cpgd_sample_windows"] = dr_meta["sample_windows"]
+            result["cpgd_attack_edges"] = dr_meta["attack_edges"]
+            logger.info("[%s] dr_under_cpgd_eps01 = %.4f", name, dr_meta["dr"])
+        results[name] = result
 
         # ── Adversarially-trained checkpoint (optional) ──────────────────────
         adv_path = Path(args.checkpoints_dir) / f"{name}_adv_best.pt"
-        if adv_path.exists():
+        if adv_path.exists() and adv_path.stat().st_size > 0:
             logger.info("[%s] Adversarially-trained checkpoint found — computing ΔF1 …", name)
             adv_model = torch.load(adv_path, map_location="cpu", weights_only=False)
             adv_model.eval()
             if is_temporal and temporal_available:
-                adv_f1 = evaluate_clean_temporal(
+                adv_metrics = evaluate_clean_temporal(
                     adv_model, temporal_train_loader, temporal_test_loader,
                 )
             else:
-                adv_f1 = evaluate_clean(adv_model, test_loader)
+                adv_metrics = evaluate_clean(adv_model, test_loader)
+            adv_f1 = float(adv_metrics["f1"])
+            clean_f1 = float(clean_metrics["f1"])
             delta = round(adv_f1 - clean_f1, 4)
             results[name]["delta_f1_after_adv_training"] = delta
             logger.info("[%s] ΔF1 = %+.4f (%.4f → %.4f)", name, delta, clean_f1, adv_f1)
+        elif adv_path.exists():
+            logger.warning("[%s] Ignoring empty adversarial checkpoint: %s", name, adv_path)
 
     output_path.write_text(json.dumps(results, indent=2))
     logger.info("Reliability metrics saved → %s", output_path)

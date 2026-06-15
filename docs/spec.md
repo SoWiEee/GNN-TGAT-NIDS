@@ -404,23 +404,34 @@ The current tracked metrics file is `data/metrics/reliability.json`.
 
 | Model | Clean test F1 | Precision | Recall | ROC-AUC | Notes |
 |---|---:|---:|---:|---:|---|
-| GraphSAGE | 0.9712 | 0.9792 | 0.9660 | 0.9992 | Latest clean static metric/log |
-| GAT | 0.9534 | n/a | n/a | n/a | Clean F1 from reliability metrics |
+| GraphSAGE | 0.9712 | 0.9792 | 0.9660 | 0.9992 | Static clean metric |
+| GAT | 0.9534 | 0.9729 | 0.9433 | 0.9963 | Static clean metric |
 | TGAT | 0.9475 | 0.9632 | 0.9391 | 0.9963 | Temporal, 30 epochs |
-| TGN | 0.9464 | 0.9619 | 0.9350 | 0.9959 | Temporal, 30 epochs |
+| TGN | 0.9463 | 0.9610 | 0.9351 | 0.9960 | Temporal, 30 epochs |
 | GraphSAGE + adv training | 0.9753 | 0.9803 | 0.9727 | 0.9997 | C-PGD augmented training, eps=0.1, steps=10, ratio=0.3 |
 | GAT + adv training | 0.9622 | 0.9696 | 0.9581 | 0.9965 | C-PGD augmented training, eps=0.1, steps=10, ratio=0.3 |
+
+Reliability C-PGD detection-rate metrics currently recorded:
+
+| Model | `dr_under_cpgd_eps01` | Scope |
+|---|---:|---|
+| GraphSAGE | 1.0000 | sampled static test windows: 16 windows, 104 attack edges |
+| GAT | 1.0000 | sampled static test windows: 16 windows, 103 attack edges |
+| TGAT | null | temporal C-PGD skipped |
+| TGN | null | temporal C-PGD skipped |
 
 Reliability deltas currently recorded:
 
 | Model | `delta_f1_after_adv_training` |
 |---|---:|
 | GraphSAGE | 0.0041 |
-| GAT | 0.0088 |
+| GAT | 0.0087 |
 | TGAT | null |
 | TGN | null |
 
-`dr_under_cpgd_eps01` is currently `null` for all models in the metrics file.
+The static C-PGD detection-rate values are sampled because full-test C-PGD over
+3312 static test windows is expensive. Use `scripts/compute_reliability_metrics.py`
+without `--cpgd-max-windows` to run the full static test split.
 
 ---
 

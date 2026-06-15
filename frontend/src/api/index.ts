@@ -58,7 +58,20 @@ export interface AdversarialResult {
 }
 
 export interface ReliabilityMetrics {
-  [model: string]: { clean_f1: number | null; dr_under_cpgd_eps01: number | null; delta_f1_after_adv_training: number | null }
+  [model: string]: {
+    clean_f1: number | null
+    clean_precision?: number | null
+    clean_recall?: number | null
+    clean_roc_auc?: number | null
+    clean_macro_f1?: number | null
+    dr_under_cpgd_eps01: number | null
+    dr_under_cpgd_eps01_sampled?: boolean | null
+    cpgd_epsilon?: number | null
+    cpgd_steps?: number | null
+    cpgd_sample_windows?: number | null
+    cpgd_attack_edges?: number | null
+    delta_f1_after_adv_training: number | null
+  }
 }
 
 export const api = {
