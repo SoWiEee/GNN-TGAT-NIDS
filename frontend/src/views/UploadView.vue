@@ -52,6 +52,7 @@
         <div class="progress-fill" :style="{ width: session.progressPct + '%' }" />
       </div>
 
+      <p v-if="dropError" class="error-msg">{{ dropError }}</p>
       <p v-if="session.status === 'error'" class="error-msg">{{ session.errorMessage }}</p>
     </div>
 
@@ -72,12 +73,19 @@ const router = useRouter()
 const selectedFile = ref<File | null>(null)
 const selectedModel = ref('gat')
 const isDragging = ref(false)
+const dropError = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 
 function onDrop(e: DragEvent) {
   isDragging.value = false
+  dropError.value = ''
   const file = e.dataTransfer?.files[0]
-  if (file?.name.endsWith('.csv')) selectedFile.value = file
+  if (!file) return
+  if (!file.name.toLowerCase().endsWith('.csv')) {
+    dropError.value = `"${file.name}" is not a CSV file. Only .csv files are accepted.`
+    return
+  }
+  selectedFile.value = file
 }
 
 function onFileChange(e: Event) {

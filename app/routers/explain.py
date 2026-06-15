@@ -19,13 +19,13 @@ TEMPORAL_MODELS = {"tgat", "tgn"}
 
 
 class ExplainRequest(BaseModel):
-    model: str = Field(default="graphsage", pattern="^(graphsage|gat)$")
+    model: str = Field(default="graphsage", pattern="^(graphsage|gat|tgat|tgn)$")
     edge_idx: int = Field(ge=0)
     epochs: int = Field(default=200, ge=10, le=1000)
 
 
 class ExplainTopRequest(BaseModel):
-    model: str = Field(default="graphsage", pattern="^(graphsage|gat)$")
+    model: str = Field(default="graphsage", pattern="^(graphsage|gat|tgat|tgn)$")
     top_k: int = Field(default=5, ge=1, le=20)
     epochs: int = Field(default=200, ge=10, le=1000)
 
@@ -55,6 +55,20 @@ def _load_session_data(session_id: UUID):
     return all_data
 
 
+def _load_session_temporal_data(session_id: UUID):
+    """Load temporal data for explainability from pre-built test split."""
+    temporal_dir = Path("data/processed/temporal")
+    test_path = temporal_dir / "test.pt"
+    if not test_path.exists():
+        raise HTTPException(
+            400,
+            detail="Temporal data not available. Run temporal_builder.py first.",
+        )
+
+    import torch
+    return torch.load(test_path, weights_only=False)
+
+
 def _sync_explain_flow(session_id: UUID, model_name: str, edge_idx: int, epochs: int) -> dict:
     from src.explain.gnn_explainer import explain_flow
 
@@ -70,6 +84,19 @@ def _sync_explain_flow(session_id: UUID, model_name: str, edge_idx: int, epochs:
         cumulative_edges += n_edges
 
     raise HTTPException(400, detail=f"edge_idx {edge_idx} out of range (total: {cumulative_edges})")
+
+
+def _sync_explain_temporal_flow(session_id: UUID, model_name: str, edge_idx: int) -> dict:
+    from src.explain.temporal_explainer import explain_temporal_flow
+
+    model = get_model(model_name)
+    batch = _load_session_temporal_data(session_id)
+    if edge_idx >= len(batch.src):
+        total = len(batch.src)
+        raise HTTPException(
+            400, detail=f"edge_idx {edge_idx} out of range (total: {total})",
+        )
+    return explain_temporal_flow(model, batch, edge_idx)
 
 
 def _sync_explain_top(session_id: UUID, model_name: str, top_k: int, epochs: int) -> list:
@@ -89,12 +116,20 @@ def _sync_explain_top(session_id: UUID, model_name: str, top_k: int, epochs: int
     return all_results[:top_k]
 
 
+def _sync_explain_temporal_top(session_id: UUID, model_name: str, top_k: int) -> list:
+    from src.explain.temporal_explainer import explain_temporal_top_alerts
+
+    model = get_model(model_name)
+    batch = _load_session_temporal_data(session_id)
+    return explain_temporal_top_alerts(model, batch, top_k=top_k)
+
+
 @router.post("/explain/{session_id}")
 async def explain_flow_endpoint(session_id: UUID, req: ExplainRequest):
-    """Explain a specific flow prediction using GNNExplainer."""
+    """Explain a specific flow prediction."""
     if req.model in TEMPORAL_MODELS:
-        raise HTTPException(
-            400, detail="Explainability only supports static models (graphsage, gat)",
+        return await run_in_threadpool(
+            _sync_explain_temporal_flow, session_id, req.model, req.edge_idx
         )
     return await run_in_threadpool(
         _sync_explain_flow, session_id, req.model, req.edge_idx, req.epochs
@@ -105,8 +140,8 @@ async def explain_flow_endpoint(session_id: UUID, req: ExplainRequest):
 async def explain_top_endpoint(session_id: UUID, req: ExplainTopRequest):
     """Explain top-K most confident attack predictions."""
     if req.model in TEMPORAL_MODELS:
-        raise HTTPException(
-            400, detail="Explainability only supports static models (graphsage, gat)",
+        return await run_in_threadpool(
+            _sync_explain_temporal_top, session_id, req.model, req.top_k
         )
     return await run_in_threadpool(
         _sync_explain_top, session_id, req.model, req.top_k, req.epochs

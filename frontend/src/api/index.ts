@@ -57,6 +57,15 @@ export interface AdversarialResult {
   }
 }
 
+export interface PerClassMetric {
+  class_id: number
+  name: string
+  precision: number
+  recall: number
+  f1: number
+  support: number
+}
+
 export interface ReliabilityMetrics {
   [model: string]: {
     clean_f1: number | null
@@ -64,6 +73,9 @@ export interface ReliabilityMetrics {
     clean_recall?: number | null
     clean_roc_auc?: number | null
     clean_macro_f1?: number | null
+    per_class?: PerClassMetric[] | null
+    confusion_matrix?: number[][] | null
+    class_names?: string[] | null
     dr_under_cpgd_eps01: number | null
     dr_under_cpgd_eps01_sampled?: boolean | null
     cpgd_epsilon?: number | null

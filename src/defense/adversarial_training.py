@@ -4,10 +4,12 @@ Augments each training batch with C-PGD adversarial examples to improve
 model robustness. The adversarially-trained model is saved as a separate
 checkpoint ({name}_adv_best.pt) for comparison with the clean-trained model.
 
+Supports both static models (edge_attr perturbation) and temporal models
+(message-space perturbation).
+
 Usage:
     uv run python train.py model=graphsage train.adversarial_training=true
-    uv run python train.py model=gat train.adversarial_training=true \
-        train.adv_ratio=0.3 train.adv_epsilon=0.1
+    uv run python train.py model=tgat data=temporal_default train.adversarial_training=true
 
 Or programmatically:
     from src.defense.adversarial_training import adversarial_train_epoch
@@ -19,6 +21,7 @@ import logging
 from dataclasses import dataclass
 
 import torch
+import torch.nn.functional as F
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 
@@ -169,6 +172,102 @@ def adversarial_train_epoch(
         else:
             loss.backward()
             optimizer.step()
+
+        total_loss += loss.item() * n_edges
+        total_edges += n_edges
+
+    return total_loss / max(total_edges, 1)
+
+
+def _fast_pgd_temporal_batch(
+    model: torch.nn.Module,
+    batch,
+    epsilon: float,
+    steps: int,
+    alpha: float | None = None,
+    clip_min: float = -3.0,
+    clip_max: float = 3.0,
+):
+    """Fast batch-level PGD for temporal models: perturb message features."""
+    if alpha is None:
+        alpha = epsilon / max(steps, 1) * 2.5
+
+    model.eval()
+    msg_orig = batch.msg.detach().clone()
+    msg_adv = msg_orig + torch.empty_like(msg_orig).uniform_(-epsilon, epsilon)
+    msg_adv = msg_adv.clamp(msg_orig - epsilon, msg_orig + epsilon).clamp(clip_min, clip_max)
+
+    target = torch.zeros(batch.y.shape[0], dtype=torch.long, device=msg_orig.device)
+
+    for _ in range(steps):
+        msg_adv = msg_adv.detach().requires_grad_(True)
+        adv_batch = batch.clone()
+        adv_batch.msg = msg_adv
+
+        logits = model(adv_batch)
+        loss = F.cross_entropy(logits, target)
+        grad = torch.autograd.grad(loss, msg_adv, retain_graph=True, allow_unused=True)[0]
+        if grad is None:
+            break
+
+        norm = grad.flatten(1).norm(2, dim=1).clamp_min(1e-8).unsqueeze(1)
+        msg_adv = (msg_adv + alpha * grad / norm).detach()
+        msg_adv = msg_adv.clamp(msg_orig - epsilon, msg_orig + epsilon).clamp(clip_min, clip_max)
+
+    adv_batch = batch.clone()
+    adv_batch.msg = msg_adv.detach()
+    model.train()
+    return adv_batch
+
+
+def adversarial_train_epoch_temporal(
+    model: torch.nn.Module,
+    loader,
+    optimizer: torch.optim.Optimizer,
+    criterion: torch.nn.Module,
+    device: torch.device,
+    adv_cfg: AdvTrainingConfig,
+    scaler: torch.amp.GradScaler | None = None,
+) -> float:
+    """Run one adversarial training epoch for temporal models."""
+    model.train()
+    model.reset_memory()
+    total_loss = 0.0
+    total_edges = 0
+    use_amp = scaler is not None
+
+    for batch in loader:
+        batch = batch.to(device)
+        n_edges = batch.y.numel()
+
+        if adv_cfg.ratio > 0:
+            adv_batch = _fast_pgd_temporal_batch(
+                model, batch, adv_cfg.epsilon, adv_cfg.steps,
+            )
+            n_adv = int(n_edges * adv_cfg.ratio)
+            if n_adv > 0:
+                perm = torch.randperm(n_edges, device=device)[:n_adv]
+                mixed_msg = batch.msg.clone()
+                mixed_msg[perm] = adv_batch.msg[perm]
+                batch = batch.clone()
+                batch.msg = mixed_msg
+
+        optimizer.zero_grad()
+        with torch.amp.autocast(
+            device_type=device.type, enabled=use_amp, dtype=torch.bfloat16
+        ):
+            logits = model(batch)
+            loss = criterion(logits, batch.y)
+
+        if use_amp:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            optimizer.step()
+
+        model.update_state(batch.src, batch.dst, batch.t, batch.msg)
 
         total_loss += loss.item() * n_edges
         total_edges += n_edges

@@ -88,7 +88,12 @@ export const useSessionStore = defineStore('session', () => {
       _startPolling(uploadData.session_id)
     } catch (err: unknown) {
       status.value = 'error'
-      errorMessage.value = err instanceof Error ? err.message : 'Upload failed'
+      if (err && typeof err === 'object' && 'response' in err) {
+        const axiosErr = err as { response?: { data?: { detail?: string } } }
+        errorMessage.value = axiosErr.response?.data?.detail ?? 'Upload failed'
+      } else {
+        errorMessage.value = err instanceof Error ? err.message : 'Upload failed'
+      }
     }
   }
 

@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from sklearn.metrics import (
     average_precision_score,
+    confusion_matrix,
     f1_score,
     precision_score,
     recall_score,
@@ -98,6 +99,55 @@ def compute_metrics(
             pass
 
     return metrics
+
+
+def compute_per_class_metrics(
+    y_true: torch.Tensor | np.ndarray,
+    y_pred: torch.Tensor | np.ndarray,
+    label_names: list[str] | None = None,
+) -> dict:
+    """Compute per-class precision, recall, F1, and the confusion matrix.
+
+    Returns
+    -------
+    dict
+        ``per_class``: list of dicts with name/precision/recall/f1/support per class.
+        ``confusion_matrix``: row=true, col=pred, as nested lists.
+        ``class_names``: ordered label names.
+    """
+    if isinstance(y_true, torch.Tensor):
+        y_true = y_true.cpu().numpy()
+    if isinstance(y_pred, torch.Tensor):
+        y_pred = y_pred.cpu().numpy()
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+
+    classes = sorted(set(y_true.tolist()) | set(y_pred.tolist()))
+    if label_names is None:
+        label_names = [str(c) for c in classes]
+
+    p_per = precision_score(y_true, y_pred, labels=classes, average=None, zero_division=0)
+    r_per = recall_score(y_true, y_pred, labels=classes, average=None, zero_division=0)
+    f_per = f1_score(y_true, y_pred, labels=classes, average=None, zero_division=0)
+    cm = confusion_matrix(y_true, y_pred, labels=classes)
+
+    per_class = []
+    for i, cls in enumerate(classes):
+        name = label_names[i] if i < len(label_names) else str(cls)
+        per_class.append({
+            "class_id": int(cls),
+            "name": name,
+            "precision": round(float(p_per[i]), 4),
+            "recall": round(float(r_per[i]), 4),
+            "f1": round(float(f_per[i]), 4),
+            "support": int((y_true == cls).sum()),
+        })
+
+    return {
+        "per_class": per_class,
+        "confusion_matrix": cm.tolist(),
+        "class_names": label_names,
+    }
 
 
 def compute_class_weights(

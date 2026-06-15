@@ -83,6 +83,55 @@
             }}
           </div>
         </div>
+
+        <details v-if="metrics.per_class && metrics.per_class.length > 0" class="per-class-section">
+          <summary class="per-class-toggle">Per-Class Metrics</summary>
+          <table class="per-class-table">
+            <thead>
+              <tr>
+                <th>Class</th>
+                <th>Precision</th>
+                <th>Recall</th>
+                <th>F1</th>
+                <th>Support</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="cls in metrics.per_class" :key="cls.class_id" :class="{ 'low-recall': cls.recall < 0.5 && cls.support > 0 }">
+                <td>{{ cls.name }}</td>
+                <td>{{ cls.precision.toFixed(3) }}</td>
+                <td>{{ cls.recall.toFixed(3) }}</td>
+                <td>{{ cls.f1.toFixed(3) }}</td>
+                <td>{{ cls.support.toLocaleString() }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </details>
+
+        <details v-if="metrics.confusion_matrix && metrics.class_names" class="per-class-section">
+          <summary class="per-class-toggle">Confusion Matrix</summary>
+          <div class="cm-wrapper">
+            <table class="cm-table">
+              <thead>
+                <tr>
+                  <th></th>
+                  <th v-for="name in metrics.class_names" :key="name" class="cm-header">{{ name.slice(0, 5) }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(row, ri) in metrics.confusion_matrix" :key="ri">
+                  <td class="cm-row-label">{{ (metrics.class_names ?? [])[ri]?.slice(0, 5) }}</td>
+                  <td
+                    v-for="(val, ci) in row"
+                    :key="ci"
+                    class="cm-cell"
+                    :style="{ background: cmColor(val, metrics.confusion_matrix!) }"
+                  >{{ val > 0 ? val : '' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
       </div>
     </div>
   </div>
@@ -94,6 +143,13 @@ import { useSessionStore } from '@/stores/session'
 
 const session = useSessionStore()
 const loading = ref(true)
+
+function cmColor(val: number, matrix: number[][]): string {
+  if (val === 0) return 'transparent'
+  const maxVal = Math.max(...matrix.flat())
+  const intensity = Math.min(val / Math.max(maxVal, 1), 1)
+  return `rgba(59, 130, 246, ${0.15 + intensity * 0.7})`
+}
 
 onMounted(async () => {
   await session.loadReliability()
@@ -145,4 +201,17 @@ onMounted(async () => {
 .metric-fill { height: 100%; border-radius: 4px; transition: width 0.6s ease; }
 .metric-value { font-size: 20px; font-weight: 700; }
 .metric-note { color: #94a3b8; font-size: 11px; margin-top: 4px; }
+.per-class-section { margin-top: 12px; }
+.per-class-toggle { cursor: pointer; font-size: 12px; color: #60a5fa; user-select: none; }
+.per-class-toggle:hover { text-decoration: underline; }
+.per-class-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 11px; }
+.per-class-table th { text-align: left; color: #94a3b8; border-bottom: 1px solid #334155; padding: 4px 6px; }
+.per-class-table td { padding: 4px 6px; border-bottom: 1px solid #1e293b; }
+.low-recall { color: #f87171; }
+.cm-wrapper { overflow-x: auto; margin-top: 8px; }
+.cm-table { border-collapse: collapse; font-size: 10px; }
+.cm-table th, .cm-table td { padding: 3px 5px; text-align: center; min-width: 36px; }
+.cm-header { color: #94a3b8; writing-mode: vertical-lr; transform: rotate(180deg); font-weight: 400; }
+.cm-row-label { text-align: right; color: #94a3b8; font-weight: 400; }
+.cm-cell { border: 1px solid #1e293b; font-variant-numeric: tabular-nums; }
 </style>

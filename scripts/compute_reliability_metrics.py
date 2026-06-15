@@ -53,6 +53,9 @@ def _empty_metrics() -> dict:
         "clean_recall": None,
         "clean_roc_auc": None,
         "clean_macro_f1": None,
+        "per_class": None,
+        "confusion_matrix": None,
+        "class_names": None,
         "dr_under_cpgd_eps01": None,
         "dr_under_cpgd_eps01_sampled": None,
         "cpgd_epsilon": None,
@@ -71,14 +74,21 @@ def _round_metric(value: float | None) -> float | None:
     return round(float(value), 4)
 
 
-def _format_metrics(metrics: dict[str, float]) -> dict:
-    return {
+def _format_metrics(metrics: dict) -> dict:
+    result = {
         "clean_f1": _round_metric(metrics.get("f1")),
         "clean_precision": _round_metric(metrics.get("precision")),
         "clean_recall": _round_metric(metrics.get("recall")),
         "clean_roc_auc": _round_metric(metrics.get("roc_auc")),
         "clean_macro_f1": _round_metric(metrics.get("macro_f1")),
     }
+    if "per_class" in metrics:
+        result["per_class"] = metrics["per_class"]
+    if "confusion_matrix" in metrics:
+        result["confusion_matrix"] = metrics["confusion_matrix"]
+    if "class_names" in metrics:
+        result["class_names"] = metrics["class_names"]
+    return result
 
 
 def load_model(name: str) -> torch.nn.Module | None:
@@ -92,8 +102,8 @@ def load_model(name: str) -> torch.nn.Module | None:
     return model
 
 
-def _collect_metrics(all_true, all_pred, all_proba) -> dict[str, float]:
-    from src.eval.metrics import compute_metrics
+def _collect_metrics(all_true, all_pred, all_proba, label_names=None) -> dict[str, float]:
+    from src.eval.metrics import compute_metrics, compute_per_class_metrics
 
     y_true = torch.cat(all_true)
     y_pred = torch.cat(all_pred)
@@ -101,6 +111,10 @@ def _collect_metrics(all_true, all_pred, all_proba) -> dict[str, float]:
     weighted = compute_metrics(y_true, y_pred, y_proba, average="weighted")
     macro = compute_metrics(y_true, y_pred, y_proba, average="macro")
     weighted["macro_f1"] = macro["f1"]
+    per_class_data = compute_per_class_metrics(y_true, y_pred, label_names)
+    weighted["per_class"] = per_class_data["per_class"]
+    weighted["confusion_matrix"] = per_class_data["confusion_matrix"]
+    weighted["class_names"] = per_class_data["class_names"]
     return weighted
 
 
@@ -113,7 +127,7 @@ def _as_probabilities(output: torch.Tensor) -> torch.Tensor:
     return torch.softmax(output, dim=-1)
 
 
-def evaluate_clean(model, loader) -> dict[str, float]:
+def evaluate_clean(model, loader, label_names=None) -> dict[str, float]:
     """Return clean weighted and macro metrics on a static DataLoader."""
     all_true, all_pred, all_proba = [], [], []
     with torch.inference_mode():
@@ -125,10 +139,10 @@ def evaluate_clean(model, loader) -> dict[str, float]:
             all_pred.append(pred)
             all_proba.append(proba)
 
-    return _collect_metrics(all_true, all_pred, all_proba)
+    return _collect_metrics(all_true, all_pred, all_proba, label_names)
 
 
-def evaluate_clean_temporal(model, train_loader, test_loader) -> dict[str, float]:
+def evaluate_clean_temporal(model, train_loader, test_loader, label_names=None) -> dict[str, float]:
     """Return clean weighted and macro metrics for temporal models.
 
     Replays train to warm memory before evaluating the test split.
@@ -149,7 +163,7 @@ def evaluate_clean_temporal(model, train_loader, test_loader) -> dict[str, float
             all_pred.append(pred)
             all_proba.append(proba)
 
-    return _collect_metrics(all_true, all_pred, all_proba)
+    return _collect_metrics(all_true, all_pred, all_proba, label_names)
 
 
 def _iter_with_limit(loader: Iterable, limit: int | None) -> Iterable:
@@ -408,6 +422,15 @@ def main() -> None:
     if unknown:
         raise ValueError(f"Unknown model(s): {unknown}")
 
+    # ── Label names ──────────────────────────────────────────────────────────
+    label2idx_path = processed_dir / "label2idx.json"
+    label_names: list[str] | None = None
+    if label2idx_path.exists():
+        label2idx = json.loads(label2idx_path.read_text())
+        idx2label = {v: k for k, v in label2idx.items()}
+        label_names = [idx2label.get(i, str(i)) for i in range(max(idx2label) + 1)]
+        logger.info("Loaded %d class labels from %s", len(label_names), label2idx_path)
+
     # ── Static data ──────────────────────────────────────────────────────────
     static_available = (processed_dir / "meta.json").exists()
     test_loader = None
@@ -454,10 +477,10 @@ def main() -> None:
             logger.info("[%s] Computing clean F1 …", name)
             if is_temporal and temporal_available:
                 clean_metrics = evaluate_clean_temporal(
-                    model, temporal_train_loader, temporal_test_loader
+                    model, temporal_train_loader, temporal_test_loader, label_names
                 )
             elif not is_temporal and static_available:
-                clean_metrics = evaluate_clean(model, test_loader)
+                clean_metrics = evaluate_clean(model, test_loader, label_names)
             else:
                 logger.warning("[%s] No matching data — skipping", name)
                 results[name] = _empty_metrics()
@@ -516,10 +539,10 @@ def main() -> None:
             adv_model.eval()
             if is_temporal and temporal_available:
                 adv_metrics = evaluate_clean_temporal(
-                    adv_model, temporal_train_loader, temporal_test_loader,
+                    adv_model, temporal_train_loader, temporal_test_loader, label_names,
                 )
             else:
-                adv_metrics = evaluate_clean(adv_model, test_loader)
+                adv_metrics = evaluate_clean(adv_model, test_loader, label_names)
             adv_f1 = float(adv_metrics["f1"])
             clean_f1 = float(clean_metrics["f1"])
             delta = round(adv_f1 - clean_f1, 4)
@@ -540,12 +563,30 @@ def main() -> None:
         if len(ensemble_models) >= 2:
             logger.info("[ensemble] Computing static soft-vote clean metrics …")
             ensemble = EnsembleModel(ensemble_models, strategy="soft_vote")
-            clean_metrics = evaluate_clean(ensemble, test_loader)
+            clean_metrics = evaluate_clean(ensemble, test_loader, label_names)
             result = _empty_metrics()
             result.update(_format_metrics(clean_metrics))
             result["cpgd_scope"] = "not_applicable"
             result["cpgd_constraint"] = "ensemble_clean_only"
             results["ensemble"] = result
+
+            # Also evaluate weighted ensemble from validation F1
+            val_ds = StaticNIDSDataset(processed_dir, split="val")
+            val_loader = DataLoader(val_ds, batch_size=args.static_batch_size, shuffle=False)
+            logger.info("[ensemble_weighted] Learning weights from %d val windows …", len(val_ds))
+            weighted_ensemble = EnsembleModel.from_validation(ensemble_models, val_loader)
+            w_metrics = evaluate_clean(weighted_ensemble, test_loader, label_names)
+            w_result = _empty_metrics()
+            w_result.update(_format_metrics(w_metrics))
+            w_result["cpgd_scope"] = "not_applicable"
+            w_result["cpgd_constraint"] = "ensemble_weighted_by_val_f1"
+            w_result["ensemble_weights"] = weighted_ensemble._weights
+            results["ensemble_weighted"] = w_result
+            logger.info(
+                "[ensemble_weighted] f1=%.4f  weights=%s",
+                w_result["clean_f1"],
+                {k: round(v, 4) for k, v in weighted_ensemble._weights.items()},
+            )
         else:
             logger.warning("[ensemble] Need at least two static checkpoints; skipping")
 

@@ -85,6 +85,32 @@ class EnsembleModel(nn.Module):
             result += self._weights[name] * proba
         return result
 
+    @classmethod
+    def from_validation(
+        cls,
+        models: dict[str, nn.Module],
+        val_loader,
+    ) -> EnsembleModel:
+        """Build a weighted ensemble using per-model validation F1 scores."""
+        from src.eval.metrics import compute_metrics
+
+        weights: dict[str, float] = {}
+        for name, model in models.items():
+            model.eval()
+            all_true, all_pred = [], []
+            with torch.inference_mode():
+                for data in val_loader:
+                    logits = model(data)
+                    pred = logits.argmax(dim=-1)
+                    all_true.append(data.y_multi)
+                    all_pred.append(pred)
+            y_true = torch.cat(all_true)
+            y_pred = torch.cat(all_pred)
+            f1 = compute_metrics(y_true, y_pred, average="weighted")["f1"]
+            weights[name] = max(float(f1), 1e-6)
+
+        return cls(models, strategy="weighted", weights=weights)
+
     def predict(self, data: Data) -> dict:
         """Return ensemble prediction with per-model breakdown."""
         self.eval()

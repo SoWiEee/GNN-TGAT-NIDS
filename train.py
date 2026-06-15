@@ -361,11 +361,14 @@ def main(cfg: DictConfig) -> None:
     patience = int(cfg.train.get("patience", 0))
     epochs_no_improve = 0
 
-    # ── Adversarial training setup (static models only) ────────────────────
-    use_adv = cfg.train.get("adversarial_training", False) and not is_temporal
+    # ── Adversarial training setup ──────────────────────────────────────────
+    use_adv = cfg.train.get("adversarial_training", False)
     adv_cfg = None
     if use_adv:
         from src.defense.adversarial_training import AdvTrainingConfig, adversarial_train_epoch
+
+        if is_temporal:
+            from src.defense.adversarial_training import adversarial_train_epoch_temporal
 
         adv_cfg = AdvTrainingConfig(
             epsilon=float(cfg.train.get("adv_epsilon", 0.1)),
@@ -376,12 +379,17 @@ def main(cfg: DictConfig) -> None:
             else None,
         )
         log.info(
-            "Adversarial training ENABLED: ε=%.3f, steps=%d, ratio=%.2f",
+            "Adversarial training ENABLED (%s): ε=%.3f, steps=%d, ratio=%.2f",
+            "temporal" if is_temporal else "static",
             adv_cfg.epsilon, adv_cfg.steps, adv_cfg.ratio,
         )
 
     for epoch in range(start_epoch, epochs):
-        if is_temporal:
+        if is_temporal and use_adv:
+            train_loss = adversarial_train_epoch_temporal(
+                model, train_loader, optimizer, criterion, device, adv_cfg, scaler
+            )
+        elif is_temporal:
             train_loss = _train_epoch_temporal(
                 model, train_loader, optimizer, criterion, device, scaler
             )
