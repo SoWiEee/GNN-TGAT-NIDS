@@ -100,6 +100,9 @@ uv run python train.py model=gat
 uv run python src/data/temporal_builder.py
 uv run python train.py model=tgat data=temporal_default
 uv run python train.py model=tgn data=temporal_default
+
+# Early stopping (stop if val_f1 doesn't improve for N epochs)
+uv run python train.py model=graphsage train.patience=10
 ```
 
 ### 4. Pre-compute model reliability metrics
@@ -177,11 +180,13 @@ GPUs with no accuracy loss.  Disable with `train.use_amp=false` if needed.
 # Install dev extras (includes optuna + optuna-dashboard)
 uv sync --group dev
 
-# Search GraphSAGE — 50 Bayesian trials × 30 epochs each (~45 min on GPU)
+# Search static models
 uv run python scripts/tune_hyperparams.py --model graphsage --trials 50
-
-# Search GAT in a second terminal
 uv run python scripts/tune_hyperparams.py --model gat --trials 50
+
+# Search temporal models
+uv run python scripts/tune_hyperparams.py --model tgat --trials 30
+uv run python scripts/tune_hyperparams.py --model tgn --trials 30
 
 # Live dashboard while running (open http://localhost:8080)
 uv run optuna-dashboard sqlite:///results/optuna.db
@@ -191,7 +196,7 @@ The search is **resume-safe** — re-running the same command continues from
 where it left off (SQLite storage).  Best parameters are saved to
 `results/best_hparams_{model}.json`.
 
-**Search space:**
+**Search space (static models):**
 
 | Hyperparameter | Range / Choices |
 |---|---|
@@ -203,6 +208,17 @@ where it left off (SQLite storage).  Best parameters are saved to
 | `num_heads` (GAT only) | 2 / 4 / 8 |
 | `aggregation` (SAGE only) | mean / max |
 
+**Search space (temporal models):**
+
+| Hyperparameter | Range / Choices |
+|---|---|
+| `lr` | 1 × 10⁻⁴ → 1 × 10⁻² (log scale) |
+| `hidden_dim` | 64 / 128 / 172 / 256 |
+| `heads` | 1 / 2 / 4 |
+| `n_neighbors` | 10 / 20 / 30 |
+| `batch_size` | 100 / 200 / 400 |
+| `memory_dim` (TGN only) | 64 / 100 / 128 |
+
 Pruning (MedianPruner) stops unpromising trials after 10 epochs — effectively
 free early stopping during search.
 
@@ -213,6 +229,20 @@ uv run python train.py model=graphsage \
   model.hidden_dim=128 model.num_layers=2 model.dropout=0.1 \
   train.lr=0.0087 train.batch_size=16 train.epochs=200
 ```
+
+### ONNX export
+
+```bash
+# Export static models to ONNX
+uv run python scripts/export_onnx.py --model graphsage
+uv run python scripts/export_onnx.py --model gat --quantize
+
+# Quantized models use dynamic uint8 quantization (requires onnxruntime)
+uv run pip install onnxruntime
+uv run python scripts/export_onnx.py --model graphsage --quantize
+```
+
+Temporal models (TGAT, TGN) have stateful memory and cannot be exported to a single ONNX graph.
 
 ---
 
@@ -272,6 +302,7 @@ GNN-NIDS-Analyzer/
 │   ├── create_demo_dataset.py      ← merge UNSW-NB15 CSVs, create demo sample
 │   ├── compute_reliability_metrics.py ← clean F1 + C-PGD DR → reliability.json
 │   ├── tune_hyperparams.py         ← Optuna Bayesian hyperparameter search
+│   ├── export_onnx.py              ← ONNX export + optional quantization
 │   └── pcap_to_netflow.py          ← PCAP → NetFlow CSV (nfstream)
 ├── configs/                    # Hydra configs
 ├── data/
@@ -353,32 +384,16 @@ GNN-NIDS-Analyzer/
 
 ---
 
-## Roadmap
+## Future Work
 
-**Phase 1 — Core Tool** (Weeks 1–8)
-- [x] FastAPI backend + CSV upload endpoint
-- [x] GNN inference service
-- [x] Vue 3 frontend scaffold
-- [x] Traffic graph view (Cytoscape.js)
-- [x] Alert list view
-- [x] Attack timeline view
-- [x] Model reliability panel (pre-computed JSON)
-
-**Phase 2 — Adversarial & Depth** (Weeks 9–12)
-- [x] C-PGD adversarial module (`src/attack/cpgd.py`)
-- [x] Edge Injection attack (`src/attack/edge_injection.py`)
-- [x] GAN-based adversarial generator (`src/attack/gan_generator.py`)
-- [x] Adversarial training defense (`src/defense/adversarial_training.py`)
-- [x] Adversarial comparison report view
-- [x] PDF / HTML export
-- [x] Curated demo dataset
-
-**Phase 3 — Temporal Models**
-- [x] TGAT model (`src/models/tgat.py`)
-- [x] TGN model (`src/models/tgn.py`)
-- [x] Temporal models wired into web app
-- [x] PCAP → NetFlow conversion (`scripts/pcap_to_netflow.py`, nfstream)
-- [ ] Memory Poisoning Attack visualization
+- **Adversarial training experiments** — Run `train.py` with `train.adversarial_training=true` and measure ΔF1 improvement for each model
+- **Learning rate scheduler** — Add cosine annealing or ReduceLROnPlateau to reduce late-training val_loss oscillation
+- **Cross-dataset validation** — Evaluate on CIC-IDS2017, CICIDS2018, and other NIDS benchmarks to test generalization
+- **Model ensemble** — Combine static + temporal model predictions for improved overall F1
+- **Streaming inference** — Extend the batch CSV pipeline to a real-time NetFlow ingestion mode
+- **GNN Explainability** — Integrate GNNExplainer to highlight which edges and features drive attack classification
+- **Frontend enhancements** — Real-time attack timeline updates, model comparison dashboard, user-defined alert rules
+- **Memory Poisoning Attack visualization** — Visualize TGN memory poisoning effects in the web app
 
 ---
 

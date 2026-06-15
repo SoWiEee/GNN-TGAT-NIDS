@@ -358,6 +358,8 @@ def main(cfg: DictConfig) -> None:
     epochs = cfg.train.epochs
     save_every = cfg.train.save_every
     val_every = cfg.train.get("val_every", 1)
+    patience = int(cfg.train.get("patience", 0))
+    epochs_no_improve = 0
 
     # ── Adversarial training setup (static models only) ────────────────────
     use_adv = cfg.train.get("adversarial_training", False) and not is_temporal
@@ -418,6 +420,7 @@ def main(cfg: DictConfig) -> None:
 
         if val_metrics["f1"] > best_val_f1:
             best_val_f1 = val_metrics["f1"]
+            epochs_no_improve = 0
             save_checkpoint(
                 model, optimizer, epoch + 1,
                 str(ckpt_dir / "best.pt"),
@@ -428,6 +431,11 @@ def main(cfg: DictConfig) -> None:
             torch.save(model.cpu(), inference_path)
             model.to(device)
             log.info("New best val_f1=%.4f → %s", best_val_f1, inference_path)
+        else:
+            epochs_no_improve += 1
+            if patience > 0 and epochs_no_improve >= patience:
+                log.info("Early stopping: no improvement for %d epochs", patience)
+                break
 
     # ── Final test evaluation ────────────────────────────────────────────────
     log.info("Loading best checkpoint for final test evaluation …")
