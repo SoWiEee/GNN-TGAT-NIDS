@@ -154,7 +154,8 @@ class CPGDAttack(BaseAttack):
         alpha: float,
     ) -> torch.Tensor | None:
         """Run C-PGD on a single edge. Returns perturbed vector or None."""
-        target = torch.tensor([_BENIGN_CLASS], dtype=torch.long)
+        device = data.edge_attr.device
+        target = torch.tensor([_BENIGN_CLASS], dtype=torch.long, device=device)
 
         # Random initialisation within ε-ball
         x_adv = x_e.clone()
@@ -188,16 +189,16 @@ class CPGDAttack(BaseAttack):
 
             # Constraint projection in raw space (if scaler available)
             if self._scaler is not None:
-                x_raw = self._inverse_transform(x_adv_new.numpy())
+                x_raw = self._inverse_transform(x_adv_new.cpu().numpy())
                 x_raw = self.cs.project(x_raw)
-                x_adv_new = torch.from_numpy(self._transform(x_raw)).float()
+                x_adv_new = torch.from_numpy(self._transform(x_raw)).float().to(device)
 
             # ℓ∞ projection back into ε-ball
             x_adv = x_adv_new.clamp(x_e - epsilon, x_e + epsilon)
 
         # CSR gate: only return if all constraints satisfied
         if self._scaler is not None:
-            x_raw_final = self._inverse_transform(x_adv.detach().numpy())
+            x_raw_final = self._inverse_transform(x_adv.detach().cpu().numpy())
             # check() expects 1-D; squeeze batch dim added in generate()
             if not self.cs.check(x_raw_final.squeeze()):
                 return None

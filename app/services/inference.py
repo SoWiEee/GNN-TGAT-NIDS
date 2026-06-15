@@ -19,10 +19,12 @@ import torch
 from fastapi.concurrency import run_in_threadpool
 
 from src.models.base import BaseNIDSModel
+from src.models.ensemble import EnsembleModel
 
 logger = logging.getLogger(__name__)
 
 _models: dict[str, BaseNIDSModel] = {}
+_ensemble: EnsembleModel | None = None
 
 CHECKPOINTS_DIR = Path("checkpoints")
 CHECKPOINT_FILES = {
@@ -53,6 +55,7 @@ def _load_single_model(name: str, path: Path) -> BaseNIDSModel | None:
 
 def load_models() -> None:
     """Load all available model checkpoints at startup."""
+    global _ensemble
     for name, path in CHECKPOINT_FILES.items():
         model = _load_single_model(name, path)
         if model is not None:
@@ -62,6 +65,18 @@ def load_models() -> None:
             "No model checkpoints found in %s — inference will not work until models are trained.",
             CHECKPOINTS_DIR,
         )
+        return
+
+    static_models = {k: v for k, v in _models.items() if k not in TEMPORAL_MODELS}
+    if len(static_models) >= 2:
+        _ensemble = EnsembleModel(static_models, strategy="soft_vote")
+        logger.info("Ensemble model built from: %s", list(static_models.keys()))
+
+
+def get_ensemble() -> EnsembleModel:
+    if _ensemble is None:
+        raise ValueError("Ensemble not available — need at least 2 static models loaded")
+    return _ensemble
 
 
 def get_model(name: str) -> BaseNIDSModel:
@@ -145,6 +160,40 @@ def _sync_inference_temporal(
     return build_graph_response(all_data, all_logits, meta, csv_path)
 
 
+def _sync_inference_ensemble(csv_path: str) -> dict[str, Any]:
+    """Run ensemble inference over all static models."""
+    import tempfile
+
+    from app.services.graph_builder import build_graph_response
+
+    ensemble = get_ensemble()
+
+    from src.data.static_builder import build_static_graphs
+    from src.data.static_dataset import StaticNIDSDataset
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        meta = build_static_graphs(
+            csv_path=csv_path,
+            output_dir=tmpdir,
+            window_size_s=60.0,
+            ratios=(1.0, 0.0, 0.0),
+        )
+        dataset = StaticNIDSDataset(root=tmpdir, split="train")
+
+        all_logits: list[torch.Tensor] = []
+        all_data = []
+        with torch.inference_mode():
+            for data in dataset:
+                proba = ensemble(data)
+                all_logits.append(proba)
+                all_data.append(data)
+
+    meta["model"] = f"ensemble({', '.join(ensemble.model_names)})"
+    return build_graph_response(all_data, all_logits, meta, csv_path)
+
+
 async def run_inference(csv_path: str, model_name: str, session_id: UUID) -> dict[str, Any]:
     """Async wrapper: runs _sync_inference in thread pool."""
+    if model_name == "ensemble":
+        return await run_in_threadpool(_sync_inference_ensemble, csv_path)
     return await run_in_threadpool(_sync_inference, csv_path, model_name)

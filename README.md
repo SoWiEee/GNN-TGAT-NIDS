@@ -244,6 +244,76 @@ uv run python scripts/export_onnx.py --model graphsage --quantize
 
 Temporal models (TGAT, TGN) have stateful memory and cannot be exported to a single ONNX graph.
 
+### Adversarial training
+
+Train models with C-PGD augmented batches to improve robustness:
+
+```bash
+# Adversarial training (uses separate checkpoint dir)
+uv run python train.py model=graphsage train.adversarial_training=true \
+    train.epochs=30 train.patience=10 \
+    train.checkpoint_dir=checkpoints/graphsage_adv
+
+# Tune adversarial parameters
+uv run python train.py model=gat train.adversarial_training=true \
+    train.adv_epsilon=0.1 train.adv_steps=10 train.adv_ratio=0.3
+```
+
+The adversarially-trained model is saved as `{model}_adv_best.pt` alongside the clean checkpoint. `compute_reliability_metrics.py` automatically picks up `_adv_best.pt` files and computes ΔF1.
+
+### Model ensemble
+
+Combine predictions from multiple static models for improved accuracy:
+
+```python
+from src.models.ensemble import EnsembleModel
+
+ensemble = EnsembleModel(
+    models={"graphsage": model_gs, "gat": model_gat},
+    strategy="soft_vote",  # or "hard_vote", "weighted"
+)
+proba = ensemble(data)  # averaged softmax probabilities
+```
+
+Strategies: `soft_vote` (average probabilities), `hard_vote` (majority vote), `weighted` (custom per-model weights). The API accepts `model=ensemble` in `/api/analyze` to run ensemble inference automatically.
+
+### Streaming inference
+
+Real-time NetFlow analysis via WebSocket:
+
+```
+ws://localhost:8000/api/ws/stream?model=graphsage&window_seconds=60
+```
+
+**Protocol:**
+- Send: `{"flows": [{"col1": val, ...}, ...]}` — buffered into time windows
+- Send: `{"command": "flush"}` — force inference on buffered flows
+- Receive: `{"type": "alerts", "window": 0, "alerts": [...], "stats": {...}}`
+- Receive: `{"type": "ack", "n_buffered": 42, "n_processed": 1000}`
+
+Flows are accumulated into configurable time windows (default 60s). When a window boundary is crossed, the system builds a graph and runs GNN inference, pushing alerts back immediately.
+
+### GNN Explainability
+
+Understand _why_ a flow was classified as an attack using GNNExplainer:
+
+```python
+from src.explain.gnn_explainer import explain_flow, explain_top_alerts
+
+# Explain a single edge prediction
+result = explain_flow(model, data, edge_idx=42, epochs=200)
+# result["top_features"] → [{"name": "node_feat_3", "importance": 0.82}, ...]
+
+# Explain top-5 most confident attack detections
+results = explain_top_alerts(model, data, top_k=5)
+```
+
+**API endpoints:**
+- `POST /api/explain/{session_id}` — explain a specific flow (`edge_idx`, `model`, `epochs`)
+- `POST /api/explain-top/{session_id}` — explain top-K alerts automatically
+
+Returns node feature importance scores (src/dst), edge importance masks, and ranked feature contributions. Currently supports static models (GraphSAGE, GAT).
+
 ---
 
 ## Project Structure
@@ -260,7 +330,8 @@ GNN-NIDS-Analyzer/
 │   │   ├── graphsage.py        ← 3-layer GraphSAGE edge classifier
 │   │   ├── gat.py              ← 4-head GAT with attention export
 │   │   ├── tgat.py             ← Temporal Graph Attention Network
-│   │   └── tgn.py              ← Temporal Graph Network (GRU memory)
+│   │   ├── tgn.py              ← Temporal Graph Network (GRU memory)
+│   │   └── ensemble.py         ← Multi-model ensemble (soft/hard/weighted vote)
 │   ├── attack/
 │   │   ├── base.py             ← BaseAttack ABC
 │   │   ├── constraints.py      ← TCP validity, co-dependency, bounds
@@ -270,6 +341,8 @@ GNN-NIDS-Analyzer/
 │   │   └── memory_poisoning.py ← TGN memory poisoning attack
 │   ├── defense/
 │   │   └── adversarial_training.py ← C-PGD augmented training
+│   ├── explain/
+│   │   └── gnn_explainer.py    ← GNNExplainer for edge-level predictions
 │   └── utils/
 │       ├── seed.py
 │       └── checkpoint.py
@@ -278,7 +351,9 @@ GNN-NIDS-Analyzer/
 │   ├── routers/
 │   │   ├── analysis.py         ← POST /analyze
 │   │   ├── adversarial.py      ← POST /adversarial
-│   │   └── report.py           ← GET  /report/{session_id}
+│   │   ├── report.py           ← GET  /report/{session_id}
+│   │   ├── streaming.py        ← WS  /ws/stream (real-time inference)
+│   │   └── explain.py          ← POST /explain (GNNExplainer)
 │   ├── services/
 │   │   ├── inference.py        ← runs GNN on uploaded data
 │   │   ├── graph_builder.py    ← builds Cytoscape.js JSON from PyG output
@@ -386,12 +461,8 @@ GNN-NIDS-Analyzer/
 
 ## Future Work
 
-- **Adversarial training experiments** — Run `train.py` with `train.adversarial_training=true` and measure ΔF1 improvement for each model
 - **Learning rate scheduler** — Add cosine annealing or ReduceLROnPlateau to reduce late-training val_loss oscillation
 - **Cross-dataset validation** — Evaluate on CIC-IDS2017, CICIDS2018, and other NIDS benchmarks to test generalization
-- **Model ensemble** — Combine static + temporal model predictions for improved overall F1
-- **Streaming inference** — Extend the batch CSV pipeline to a real-time NetFlow ingestion mode
-- **GNN Explainability** — Integrate GNNExplainer to highlight which edges and features drive attack classification
 - **Frontend enhancements** — Real-time attack timeline updates, model comparison dashboard, user-defined alert rules
 - **Memory Poisoning Attack visualization** — Visualize TGN memory poisoning effects in the web app
 

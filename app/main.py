@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import adversarial, analysis, report
+from app.routers import adversarial, analysis, explain, report, streaming
 from app.services.inference import load_models
 
 logger = logging.getLogger(__name__)
@@ -68,3 +68,5 @@ app.add_middleware(
 app.include_router(analysis.router, prefix="/api")
 app.include_router(adversarial.router, prefix="/api")
 app.include_router(report.router, prefix="/api")
+app.include_router(streaming.router, prefix="/api")
+app.include_router(explain.router, prefix="/api")

@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 
 class AnalyzeRequest(BaseModel):
-    model: str = Field(default="gat", pattern="^(graphsage|gat)$")
+    model: str = Field(default="gat", pattern="^(graphsage|gat|tgat|tgn|ensemble)$")
 
 
 class AnalyzeResponse(BaseModel):

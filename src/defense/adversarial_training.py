@@ -22,8 +22,6 @@ import torch
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 
-from src.attack.cpgd import CPGDAttack
-
 logger = logging.getLogger(__name__)
 
 
@@ -53,14 +51,48 @@ class AdvTrainingConfig:
     scaler_path: str | None = None
 
 
-def _generate_adversarial_batch(
+def _fast_pgd_batch(
     model: torch.nn.Module,
     data: Data,
-    attacker: CPGDAttack,
+    epsilon: float,
+    steps: int,
+    alpha: float | None = None,
 ) -> Data:
-    """Generate adversarial version of a single graph batch."""
+    """Fast batch-level PGD: perturb ALL edge features simultaneously.
+
+    Unlike per-edge C-PGD (which runs steps × n_attack_edges forward passes),
+    this uses only ``steps`` forward passes total, making it practical for
+    adversarial training where speed matters more than per-edge precision.
+    """
+    if alpha is None:
+        alpha = epsilon / max(steps, 1) * 2.5
+
     model.eval()
-    adv_data = attacker.generate(model, data)
+    x_orig = data.edge_attr.detach().clone()
+    x_adv = x_orig + torch.empty_like(x_orig).uniform_(-epsilon, epsilon)
+    x_adv = x_adv.clamp(x_orig - epsilon, x_orig + epsilon)
+
+    target = torch.zeros(data.y_multi.shape[0], dtype=torch.long, device=x_orig.device)
+
+    for _ in range(steps):
+        x_adv = x_adv.detach().requires_grad_(True)
+        mod_data = data.clone()
+        mod_data.edge_attr = x_adv
+
+        logits = model(mod_data)
+        loss = torch.nn.functional.cross_entropy(logits, target)
+        loss.backward()
+
+        grad = x_adv.grad
+        if grad is None:
+            break
+
+        norm = grad.norm(2, dim=-1, keepdim=True).clamp(min=1e-8)
+        x_adv = (x_adv + alpha * grad / norm).detach()
+        x_adv = x_adv.clamp(x_orig - epsilon, x_orig + epsilon)
+
+    adv_data = data.clone()
+    adv_data.edge_attr = x_adv.detach()
     model.train()
     return adv_data
 
@@ -76,9 +108,8 @@ def adversarial_train_epoch(
 ) -> float:
     """Run one adversarial training epoch.
 
-    For each batch, generates adversarial examples via C-PGD and mixes them
-    with clean examples according to ``adv_cfg.ratio``. The model is trained
-    on the mixed batch.
+    For each batch, generates adversarial examples via fast batch-level PGD
+    and mixes them with clean examples according to ``adv_cfg.ratio``.
 
     Parameters
     ----------
@@ -107,21 +138,14 @@ def adversarial_train_epoch(
     total_edges = 0
     use_amp = scaler is not None
 
-    attacker = CPGDAttack(
-        epsilon=adv_cfg.epsilon,
-        steps=adv_cfg.steps,
-        alpha=adv_cfg.alpha,
-        scaler_path=adv_cfg.scaler_path,
-    )
-
     for data in loader:
         data = data.to(device)
         n_edges = data.y_multi.numel()
 
-        # Generate adversarial examples for a portion of edges
         if adv_cfg.ratio > 0:
-            adv_data = _generate_adversarial_batch(model, data, attacker)
-            # Mix: replace a fraction of edge features with adversarial versions
+            adv_data = _fast_pgd_batch(
+                model, data, adv_cfg.epsilon, adv_cfg.steps, adv_cfg.alpha,
+            )
             n_adv = int(n_edges * adv_cfg.ratio)
             if n_adv > 0:
                 perm = torch.randperm(n_edges, device=device)[:n_adv]

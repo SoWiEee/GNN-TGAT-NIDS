@@ -426,8 +426,9 @@ def main(cfg: DictConfig) -> None:
                 str(ckpt_dir / "best.pt"),
                 extra={"val_metrics": val_metrics},
             )
+            model_key = cfg.model._target_.rsplit(".", 1)[-1].replace("Model", "").lower()
             suffix = "_adv_best.pt" if use_adv else "_best.pt"
-            inference_path = ckpt_dir.parent / f"{Path(ckpt_dir).name}{suffix}"
+            inference_path = ckpt_dir.parent / f"{model_key}{suffix}"
             torch.save(model.cpu(), inference_path)
             model.to(device)
             log.info("New best val_f1=%.4f → %s", best_val_f1, inference_path)
