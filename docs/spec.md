@@ -1,775 +1,493 @@
-# System Specification: GNN-NIDS Analyzer
+# System Specification: GNN-TGAT-NIDS
 
-> Upload NetFlow traffic → GNN detection → interactive web visualization + adversarial robustness report.
+> Upload NetFlow traffic -> GNN-based intrusion detection -> interactive graph,
+> alerts, reliability metrics, adversarial comparison, explainability, and report export.
 
-**Version:** 1.0.0
-**Status:** Draft
-**Last Updated:** 2026-06
-
----
-
-## Table of Contents
-
-1. [System Overview](#1-system-overview)
-   - [1.1 Goal and User Story](#11-goal-and-user-story)
-   - [1.2 System Flow](#12-system-flow)
-   - [1.3 Out of Scope](#13-out-of-scope)
-2. [Architecture](#2-architecture)
-   - [2.1 Component Diagram](#21-component-diagram)
-   - [2.2 Backend — FastAPI](#22-backend--fastapi)
-   - [2.3 Frontend — Vue 3 + Vite](#23-frontend--vue-3--vite)
-   - [2.4 Module Structure](#24-module-structure)
-   - [2.5 Abstract Base Classes](#25-abstract-base-classes)
-   - [2.6 Checkpointing & Reproducibility](#26-checkpointing--reproducibility)
-   - [2.7 Coding Standards](#27-coding-standards)
-3. [ML Pipeline](#3-ml-pipeline)
-   - [3.1 Graph Construction](#31-graph-construction)
-   - [3.2 NIDS Models](#32-nids-models)
-   - [3.3 Adversarial Module (C-PGD)](#33-adversarial-module-c-pgd)
-4. [Data Pipeline](#4-data-pipeline)
-5. [Frontend Views](#5-frontend-views)
-   - [5.1 Traffic Graph](#51-traffic-graph)
-   - [5.2 Alert List](#52-alert-list)
-   - [5.3 Attack Timeline](#53-attack-timeline)
-   - [5.4 Model Reliability Panel](#54-model-reliability-panel)
-   - [5.5 Adversarial Comparison Report](#55-adversarial-comparison-report)
-6. [API Design](#6-api-design)
-7. [Report Generation](#7-report-generation)
-8. [Demo Dataset Strategy](#8-demo-dataset-strategy)
-9. [Milestones](#9-milestones)
-10. [References](#10-references)
+**Version:** 1.1.0  
+**Status:** Implementation-aligned draft  
+**Last Updated:** 2026-06-15
 
 ---
 
-## 1. System Overview
+## 1. Scope
 
-### 1.1 Goal and User Story
+GNN-TGAT-NIDS is a research and demo system for graph-based network intrusion detection. It combines a Python/PyTorch Geometric ML core, a FastAPI backend, and a Vue 3 frontend.
 
-**Goal:** A self-contained web application that lets a user upload a NetFlow CSV file, runs GNN-based intrusion detection, and presents results as an interactive graph + alert list + report — including adversarial robustness analysis.
+Primary user workflow:
 
-**Primary user story:**
+1. Upload a NetFlow CSV.
+2. Start session-based inference with GraphSAGE, GAT, TGAT, TGN, or a static ensemble.
+3. Inspect traffic graph, alerts, and attack timeline.
+4. Generate a C-PGD adversarial comparison for a selected alert.
+5. Export an HTML or PDF report.
 
-> As a network security analyst (or evaluator reviewing this project), I upload a NetFlow CSV.
-> Within seconds I see the traffic as an interactive graph coloured by risk, a list of high-confidence alerts with explanation, and a timeline of attack patterns.
-> I can select any detected attack flow and see a side-by-side comparison showing how an adversarial perturbation would have evaded the detector — with protocol constraints verified.
-> I export a PDF report summarising findings and model reliability metrics.
+Research workflow:
 
-**Secondary user story (evaluator / reviewer):**
+- Build static snapshot graphs and temporal event graphs.
+- Train GraphSAGE, GAT, TGAT, and TGN.
+- Evaluate clean performance, adversarial training, C-PGD, edge injection, GAN-based adversarial flows, memory poisoning, and explainability.
 
-> I want to know how trustworthy this system is.
-> The Model Reliability Panel shows me: clean F1, detection rate under adversarial attack, and improvement after adversarial training — answering "what happens if someone tries to fool this?"
+Out of scope for the current implementation:
 
-### 1.2 System Flow
-
-```mermaid
-flowchart LR
-    subgraph Input
-        CSV["📄 NetFlow CSV"]
-    end
-
-    subgraph Backend["Backend — FastAPI"]
-        SB["Static Graph Builder\n60 s windows"]
-        GNN["GNN Inference\nGraphSAGE / GAT"]
-        ADV["C-PGD Adversarial\nModule"]
-        RPT["Report Builder\nJinja2 → PDF/HTML"]
-    end
-
-    subgraph Frontend["Frontend — Vue 3 + Vite"]
-        V1["① Traffic Graph"]
-        V2["② Alert List"]
-        V3["③ Attack Timeline"]
-        V4["④ Reliability Panel"]
-        V5["⑤ Adversarial Report"]
-    end
-
-    CSV --> SB --> GNN --> V1 & V2 & V3
-    GNN --> ADV --> V5
-    V5 --> RPT
-    V4 -.->|"pre-computed\nreliability.json"| V4
-```
-
-### 1.3 Out of Scope
-
-- Live PCAP capture / streaming inference
-- Multi-user authentication / session management
-- Production deployment hardening (TLS, rate limiting)
-- Memory Poisoning Attack visualization
+- Authentication and multi-user authorization.
+- Production deployment hardening beyond local/demo CORS and session cleanup.
+- Training through the web UI.
+- Explainability for temporal models.
+- ONNX export for temporal models.
 
 ---
 
 ## 2. Architecture
 
-### 2.1 Component Diagram
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  Browser  (Vue 3 + Vite)                                      │
-│  ┌──────────┐ ┌───────────┐ ┌────────────┐ ┌─────────────┐  │
-│  │ Traffic  │ │  Alert    │ │  Attack    │ │ Adversarial │  │
-│  │ Graph    │ │  List     │ │  Timeline  │ │ Report      │  │
-│  │Cytoscape │ │           │ │  Plotly.js │ │ + PDF export│  │
-│  └────┬─────┘ └─────┬─────┘ └─────┬──────┘ └──────┬──────┘  │
-└───────┼─────────────┼─────────────┼────────────────┼─────────┘
-        │  axios      │             │                │
-┌───────▼─────────────▼─────────────▼────────────────▼─────────┐
-│  FastAPI (uvicorn)                                             │
-│  POST /analyze   GET /alerts   GET /timeline   POST /adv      │
-│  ┌──────────────────────────────────────────────────────────┐ │
-│  │  app/services/                                           │ │
-│  │  ├── inference.py   ← loads checkpoint, runs GNN        │ │
-│  │  ├── graph_builder.py ← PyG → Cytoscape.js JSON         │ │
-│  │  └── report_builder.py ← Jinja2 → WeasyPrint PDF        │ │
-│  └──────────────────────────────────────────────────────────┘ │
-│  ┌──────────────────────────────────────────────────────────┐ │
-│  │  src/  (ML core)                                         │ │
-│  │  data/static_builder.py   models/graphsage.py           │ │
-│  │  data/static_dataset.py   models/gat.py                 │ │
-│  │  attack/constraints.py    attack/cpgd.py                │ │
-│  └──────────────────────────────────────────────────────────┘ │
-└────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    CSV["NetFlow CSV"] --> Upload["POST /api/upload"]
+    Upload --> Analyze["POST /api/analyze/{session_id}"]
+    Analyze --> Build["Temporary static graph build"]
+    Build --> Infer["GraphSAGE / GAT / TGAT / TGN / ensemble"]
+    Infer --> Result["data/sessions/{session_id}/result.json"]
+    Result --> Graph["GET /api/graph/{session_id}"]
+    Result --> Alerts["GET /api/alerts/{session_id}"]
+    Result --> Timeline["GET /api/timeline/{session_id}"]
+    Result --> Adv["POST /api/adversarial"]
+    Result --> Explain["POST /api/explain*"]
+    Result --> Report["POST /api/report/{session_id}"]
+    Metrics["data/metrics/reliability.json"] --> Reliability["GET /api/metrics"]
 ```
 
-### 2.2 Backend — FastAPI
+### 2.1 Repository Layout
 
-**Entry point:** `app/main.py`
+```text
+app/                         FastAPI application
+  main.py                    app setup, CORS, model loading, session cleanup
+  routers/
+    analysis.py              upload, analyze, status, graph, alerts, timeline
+    adversarial.py           C-PGD comparison endpoint
+    explain.py               GNNExplainer endpoints for static models
+    report.py                reports and reliability metrics
+    streaming.py             WebSocket streaming inference
+  services/
+    inference.py             checkpoint loading and model inference
+    graph_builder.py         PyG/logits -> Cytoscape + alerts + Plotly timeline
+    cpgd_service.py          web wrapper around CPGDAttack
+    report_builder.py        Jinja2 -> HTML/PDF
 
-```python
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from app.routers import analysis, adversarial, report
-from app.services.inference import load_model
+src/                         ML core
+  data/                      CSV loading, static graph build, temporal build
+  models/                    BaseNIDSModel, GraphSAGE, GAT, TGAT, TGN, ensemble
+  attack/                    C-PGD, constraints, edge injection, GAN, memory poisoning
+  defense/                   adversarial training
+  explain/                   GNNExplainer integration
+  eval/                      metrics and FocalLoss
+  utils/                     seed and checkpoint helpers
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    load_model()          # load checkpoint once at startup
-    yield
-
-app = FastAPI(lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"])
-app.include_router(analysis.router)
-app.include_router(adversarial.router)
-app.include_router(report.router)
+frontend/src/                Vue 3 + Vite + TypeScript frontend
+  api/                       Axios API client and response types
+  router/                    route table
+  stores/session.ts          single Pinia session store
+  views/                     Upload, graph, alerts, timeline, reliability, adversarial
 ```
 
-**Session model:** Each uploaded CSV gets a `session_id` (UUID). Processed graphs and inference results are stored under `data/sessions/{session_id}/` and cleaned up after 1 hour.
+### 2.2 Runtime State
 
-### 2.3 Frontend — Vue 3 + Vite
+Session state is file-backed under `data/sessions/{session_id}/`:
 
-**Key dependencies:**
-
-| Package | Purpose |
-|---------|---------|
-| `vue` 3.x | Composition API |
-| `vite` | Build tool + dev server |
-| `pinia` | State management (session store, alert store) |
-| `vue-router` | Tab-based navigation between 5 views |
-| `cytoscape` | Traffic graph rendering |
-| `plotly.js` | Attack timeline chart |
-| `axios` | API client |
-
-**Store design (Pinia):**
-
-```typescript
-// stores/session.ts
-interface SessionStore {
-  sessionId: string | null
-  status: 'idle' | 'uploading' | 'analyzing' | 'ready' | 'error'
-  graphData: CytoscapeElements | null
-  alerts: Alert[]
-  timelineData: PlotlyData | null
-  reliability: ReliabilityMetrics | null
-}
+```text
+data/sessions/{session_id}/
+  upload.csv
+  status.json
+  result.json
+  adversarial/{flow_id}_eps{epsilon}_steps{steps}.json
+  report.html
+  report.pdf
 ```
 
-### 2.4 Module Structure
-
-```
-src/                           # ML core
-├── models/
-│   ├── base.py                ← BaseNIDSModel ABC
-│   ├── graphsage.py           ← ✅ implemented
-│   ├── gat.py                 ← ✅ implemented
-│   ├── tgat.py                ← ✅ implemented (Phase 3)
-│   └── tgn.py                 ← ✅ implemented (Phase 3)
-├── attack/
-│   ├── base.py                ← BaseAttack ABC
-│   ├── constraints.py         ← ✅ implemented (TCP, bounds, co-dep)
-│   ├── cpgd.py                ← ✅ implemented
-│   ├── edge_injection.py      ← ✅ implemented
-│   └── gan_generator.py       ← ✅ implemented
-├── defense/
-│   └── adversarial_training.py ← ✅ implemented
-├── data/
-│   ├── loader.py              ← ✅ implemented
-│   ├── static_builder.py      ← ✅ implemented
-│   └── static_dataset.py      ← ✅ implemented
-├── eval/
-│   └── metrics.py             ← ✅ implemented
-└── utils/
-    ├── seed.py                ← ✅ implemented
-    └── checkpoint.py          ← ✅ implemented
-
-app/                           # FastAPI application
-├── main.py
-├── routers/
-│   ├── analysis.py
-│   ├── adversarial.py
-│   └── report.py
-├── services/
-│   ├── inference.py
-│   ├── graph_builder.py
-│   └── report_builder.py
-└── templates/
-    └── report.html.j2
-
-frontend/                      # Vue 3 + Vite
-├── src/
-│   ├── views/
-│   │   ├── TrafficGraph.vue
-│   │   ├── AlertList.vue
-│   │   ├── AttackTimeline.vue
-│   │   ├── ReliabilityPanel.vue
-│   │   └── AdversarialReport.vue
-│   ├── components/
-│   ├── stores/
-│   └── api/
-├── vite.config.ts
-└── package.json
-
-scripts/
-├── compute_reliability_metrics.py  ← offline, run once after training
-├── tune_hyperparams.py             ← Optuna hyperparameter search
-└── pcap_to_netflow.py              ← PCAP → NetFlow CSV (nfstream)
-```
-
-> **重要：** `constraints.py` 屬於攻擊邏輯，放在 `src/attack/` 而非 `src/data/`，以避免資料模組對攻擊模組的反向依賴。
-
-### 2.5 Abstract Base Classes
-
-**`src/models/base.py`** — all GNN models implement this interface so `app/services/inference.py` can call any model uniformly:
-
-```python
-class BaseNIDSModel(ABC):
-    @abstractmethod
-    def forward(self, data: Data) -> torch.Tensor:
-        """Return per-edge logits (num_edges, num_classes)."""
-    @abstractmethod
-    def predict_edges(self, data: Data) -> torch.Tensor:
-        """Return per-edge predicted class indices."""
-    def attention_weights(self, data: Data) -> torch.Tensor | None:
-        """Return edge attention weights for alert explanation (GAT only)."""
-        return None
-```
-
-**`src/attack/base.py`** — adversarial module interface:
-
-```python
-class BaseAttack(ABC):
-    @abstractmethod
-    def generate(self, model: BaseNIDSModel, data, **kwargs): ...
-    @abstractmethod
-    def constraint_check(self, x_adv, attack_label: int | None = None) -> bool: ...
-```
-
-### 2.6 Checkpointing & Reproducibility
-
-- `src/utils/seed.py` — `set_global_seed(seed)` fixes Python / NumPy / PyTorch / CUDA.
-- `src/utils/checkpoint.py` — `save_checkpoint` / `load_checkpoint` with epoch tracking.
-- `app/services/inference.py` loads the checkpoint **once** at FastAPI startup (lifespan event) and holds the model in memory for the duration of the server process.
-- All trained checkpoints are saved to `checkpoints/` (git-ignored); a demo checkpoint is committed separately.
-
-### 2.7 Coding Standards
-
-| Item | Standard |
-|------|----------|
-| Type hints | Python 3.12 native (`list[int]`, `dict[str, Any]`) |
-| Docstrings | Google style (Args / Returns / Raises) |
-| Linter | `ruff`, line-length = 100 |
-| Backend tests | `pytest tests/` covering `constraints.py`, `metrics.py`, API routes |
-| Frontend | TypeScript strict mode; Composition API only; no Options API |
+`app/main.py` creates the session directory, loads model checkpoints once at startup, and starts a background cleanup task. The default TTL is 3600 seconds and can be changed with `SESSION_TTL_SECONDS`.
 
 ---
 
-## 3. ML Pipeline
+## 3. Data Pipeline
 
-### 3.1 Graph Construction Pipeline
+### 3.1 Static Graphs
 
-#### 3.1.1 Data Ingestion
+Implementation: `src/data/static_builder.py`
 
-| Parameter | Value |
-|-----------|-------|
-| Primary dataset | NF-UNSW-NB15-v2 |
-| Secondary dataset | NF-BoT-IoT-v2（跨資料集驗證） |
-| Input format | NetFlow CSV (pre-extracted features) |
-| Node definition | (IP address, port) tuple |
-| Edge definition | Directional flow from src node to dst node |
+The static builder:
 
-#### 3.1.2 Static Graph Builder
+1. Loads a NetFlow-style CSV with timestamp and label detection.
+2. Encodes labels, with benign/normal as class 0 when present.
+3. Splits data chronologically.
+4. Fits `StandardScaler` on train features only.
+5. Clips raw features at `mean +/- clip_sigma * scale`.
+6. Saves both `scaler.pkl` and `scaler.json`.
+7. Writes one PyG `Data` object per time window.
 
-- **Windowing strategy:** Tumbling windows of configurable duration (default: 60s)
-- **Node features:** Aggregated statistics per node per window (degree, total bytes sent/received, unique destination count)
-- **Edge features:** Per-flow NetFlow features (34 features from NF-UNSW-NB15-v2)
-- **Edge label:** Binary (benign=0, attack=1) and multi-class (attack category)
-- **Output format:** PyTorch Geometric `Data` objects, serialized as `.pt` files
+Static graph schema:
 
-**按需載入（`src/data/static_dataset.py`）**
-
-靜態圖建構完成後，不應在訓練時一次性載入所有時間窗口（OOM 風險）。改用 PyG `Dataset` 按需讀取：
-
-```python
-from torch_geometric.data import Dataset
-import torch
-
-class StaticNIDSDataset(Dataset):
-    """On-demand loader for time-window snapshot graphs."""
-
-    def len(self) -> int:
-        return len(self.processed_file_names)
-
-    def get(self, idx: int):
-        return torch.load(self.processed_paths[idx], weights_only=True)
+```text
+Data(
+  x          = node aggregate features,
+  edge_index = directed flow edges,
+  edge_attr  = normalized NetFlow features,
+  y          = binary labels,
+  y_multi    = multiclass labels,
+  num_nodes  = node count
+)
 ```
 
-搭配 `DataLoader(num_workers=4)` 做預取，避免 GPU 等待 I/O。
+Node identity:
 
-**Scaler 序列化**
+- If IP columns are present, endpoints use `(ip, port)` tuples.
+- If IP columns are absent, processed UNSW-style data uses proxy nodes:
+  - source: `("src", sttl // 16, proto)`
+  - destination: `("dst", dttl // 16, service)`
 
-`static_builder.py` 完成後，將 `StandardScaler` 序列化供攻擊模組使用（inverse transform → 代數重算 → transform）：
+Default offline static config (`configs/data/static_default.yaml`):
 
-```python
-import pickle
-from pathlib import Path
+| Key | Value |
+|---|---|
+| Dataset | `NF-UNSW-NB15-v2` |
+| Raw path | `data/raw/NF-UNSW-NB15-v2.csv` |
+| Processed dir | `data/processed/static` |
+| Label column | `attack_cat` |
+| Window size | 120 seconds |
+| Split | 60% train, 20% val, 20% test |
+| Normalization | z-score, train-only scaler, clip at 3 sigma |
 
-scaler_path = Path("data/processed/static/scaler.pkl")
-with open(scaler_path, "wb") as f:
-    pickle.dump(scaler, f)
+Important current mismatch:
+
+- Offline static training defaults to 120-second windows.
+- Web upload inference in `app/services/inference.py` currently builds temporary static graphs with 60-second windows.
+- Explainability and streaming defaults also use 60-second windows.
+
+This should be considered when comparing offline training metrics to web-demo behavior.
+
+### 3.2 Temporal Graphs
+
+Implementation: `src/data/temporal_builder.py`
+
+Temporal data uses continuous PyG `TemporalData`, not snapshot windows:
+
+```text
+TemporalData(src, dst, t, msg, y)
 ```
 
-#### 3.1.3 Feature Normalization
+Supported inputs:
 
-- Z-score normalization fitted **on training split only**
-- Clipping at ±3σ to reduce outlier sensitivity
-- Categorical features (protocol type) one-hot encoded
-- Scaler serialized to `data/processed/{static,temporal}/scaler.pkl` for use by attack modules
+- Single CSV through `load_csv`.
+- Raw UNSW-NB15 files named `UNSW-NB15_1.csv` through `UNSW-NB15_4.csv`.
+
+Temporal node identity is IP-level and requires source/destination IP columns. Outputs are stored in `data/processed/temporal/{train,val,test}.pt` with `meta.json` and `scaler.pkl`.
 
 ---
 
-### 3.2 NIDS Models
+## 4. Models and Training
 
-所有模型繼承 `src/models/base.py` 的 `BaseNIDSModel`，並統一採用 **weighted cross-entropy** 處理類別不平衡。class weights 由訓練集標籤頻率自動計算。
+All models implement `src.models.base.BaseNIDSModel`:
 
-> ⚠️ NF-UNSW-NB15-v2 的攻擊流量比例遠低於正常流量。若不處理不平衡，所有模型會偏向預測 benign，導致召回率虛高而攻擊偵測率偏低。
+```python
+forward(data) -> torch.Tensor      # per-edge logits, [num_edges, num_classes]
+predict_edges(data) -> torch.Tensor
+predict_proba(data) -> torch.Tensor
+```
 
-#### 3.2.1 Static GNN (Baseline)
+### 4.1 Model Configurations
 
-**Model A: GraphSAGE**
+| Model | Config | Main settings |
+|---|---|---|
+| GraphSAGE | `configs/model/graphsage.yaml` | 3 layers, hidden 256, dropout 0.3, mean aggregation |
+| GAT | `configs/model/gat.yaml` | 3 layers, hidden 256, 4 heads, dropout 0.3 |
+| TGAT | `configs/model/tgat.yaml` | hidden 172, 2 heads, 20 recent neighbors |
+| TGN | `configs/model/tgn.yaml` | memory 172, time dim 64, hidden 256, 20 neighbors, graph attention |
 
-| Parameter | Default Value |
-|-----------|---------------|
-| Aggregation | Mean |
-| Layers | 3 |
-| Hidden dim | 256 |
-| Dropout | 0.3 |
-| Task | Edge classification |
-| Loss | Weighted cross-entropy（class weights from train split） |
+`src/models/ensemble.py` supports static-model ensembles with `soft_vote`, `hard_vote`, and `weighted` strategies. The API accepts `model=ensemble` when at least two static model checkpoints are loaded.
 
-**Model B: GAT**
+### 4.2 Training
 
-| Parameter | Default Value |
-|-----------|---------------|
-| Attention heads | 4 |
-| Layers | 3 |
-| Hidden dim | 256 |
-| Dropout | 0.3 |
-| Task | Edge classification |
-| Loss | Weighted cross-entropy（class weights from train split） |
+Entry point: `train.py`
 
-#### 3.2.2 Temporal GNN (Primary Research Target)
+```bash
+uv run python train.py model=graphsage data=static_default
+uv run python train.py model=gat data=static_default
+uv run python train.py model=tgat data=temporal_default
+uv run python train.py model=tgn data=temporal_default
+```
 
-**Model C: TGAT**
+Default training settings (`configs/train.yaml`):
 
-| Parameter | Default Value |
-|-----------|---------------|
-| Attention heads | 2 |
-| Time encoding | Learnable time2vec |
-| Neighborhood sampling | Most recent k neighbors (k=20) |
-| Hidden dim | 172 |
-| Task | Edge classification (flow-level) |
-| Loss | Weighted cross-entropy（class weights from train split） |
-| `memory_reset_policy` | `before_each_attack`（見下） |
+| Key | Default |
+|---|---|
+| `train.lr` | 0.001 |
+| `train.epochs` | 200 |
+| `train.batch_size` | 32 |
+| `train.use_amp` | true on CUDA |
+| `train.loss` | focal |
+| `train.focal_gamma` | 2.0 |
+| `train.save_every` | 10 |
+| `train.val_every` | 1 |
+| `train.patience` | 0 |
+| `train.adversarial_training` | false |
 
-**Model D: TGN**
+Class weights are computed from the training split. With `train.loss=focal`, the model uses weighted focal loss; otherwise it uses weighted cross entropy.
 
-| Parameter | Default Value |
-|-----------|---------------|
-| Memory dimension | 172 |
-| Message function | MLP |
-| Memory updater | GRU |
-| Embedding module | Graph attention |
-| Task | Edge classification |
-| Loss | Weighted cross-entropy（class weights from train split） |
-| `memory_reset_policy` | `before_each_attack`（見下） |
+Checkpoint outputs:
 
-#### 3.2.3 Temporal Models
-
-TGAT and TGN are implemented in `src/models/` and **connected to the web app**. The frontend model selector offers all four models (GraphSAGE, GAT, TGAT, TGN). Temporal models use `_sync_inference_temporal()` in `inference.py` which builds static graphs for visualization while running temporal model inference.
-
-> **Quality gate:** GraphSAGE / GAT must reach weighted F1 ≥ 0.90 on NF-UNSW-NB15-v2 test split before Phase 2 (adversarial module) begins.
+- Resume checkpoint: `{train.checkpoint_dir}/latest.pt`
+- Best training checkpoint: `{train.checkpoint_dir}/best.pt`
+- Periodic checkpoints: `{train.checkpoint_dir}/epochNNNN.pt`
+- Web inference model: `checkpoints/{model}_best.pt`
+- Adversarially trained web model: `checkpoints/{model}_adv_best.pt`
 
 ---
 
-### 3.3 Adversarial Module (C-PGD)
+## 5. Adversarial Robustness
 
-The adversarial module's sole purpose in v1 is to power **View ⑤ — Adversarial Comparison Report**. It takes a detected attack flow, generates a protocol-valid adversarial version that evades detection, and returns both versions for side-by-side display.
+### 5.1 C-PGD
 
-#### 3.3.1 Algorithm
+Implementation: `src/attack/cpgd.py`  
+Web wrapper: `app/services/cpgd_service.py`
 
-```
-Input:  x     — original normalised flow feature vector (attack, detected)
-        model — loaded GNN (GraphSAGE or GAT)
-        ε     — perturbation budget (default 0.1)
-        T     — PGD steps (default 40)
-        α     — step size (default 0.01)
+C-PGD perturbs edge features in normalized space, projects each step through raw-scale protocol constraints, and returns only constraint-satisfying adversarial examples.
 
-Initialize: x_adv ← x + Uniform(-ε, ε)
-
-For t = 1 to T:
-    g     ← ∇_x  CrossEntropy(model(x_adv), target=benign)
-    x_adv ← x_adv + α · g / (‖g‖₂ + 1e-8)     # normalised gradient step
-    x_raw ← scaler.inverse_transform(x_adv)      # back to raw scale
-    x_raw ← ConstraintSet.project(x_raw)         # enforce protocol constraints
-    x_adv ← scaler.transform(x_raw)             # re-normalise
-    x_adv ← clip(x_adv, x − ε, x + ε)
-
-Return: x_adv  if ConstraintSet.check(x_adv) else None   # CSR = 1.0 gate
+```text
+x_adv = x + Uniform(-epsilon, epsilon)
+for step in steps:
+    grad = d CrossEntropy(model(x_adv), target=benign) / d x_adv
+    x_adv = x_adv + alpha * normalized(grad)
+    x_raw = inverse_transform(x_adv)
+    x_raw = ConstraintSet.project(x_raw)
+    x_adv = transform(x_raw)
+    x_adv = clip(x_adv, x - epsilon, x + epsilon)
+return x_adv if ConstraintSet.check(x_raw_final)
 ```
 
-#### 3.3.2 Constraint Set (existing `src/attack/constraints.py`)
+Web defaults:
 
-All five constraint types are enforced after every PGD step:
+- `epsilon = 0.1`
+- `steps = 40`
+- timeout = 30 seconds
+- result cache keyed by `(session_id, flow_id, epsilon, steps)`
 
-| Constraint | Implementation |
-|-----------|----------------|
-| TCP flag validity | Rule-based lookup (`is_valid_tcp_flags`) |
-| Feature co-dependency | Algebraic recompute (`SRC_TO_DST_SECOND_BYTES` etc.) |
-| Feature bounds | Per-feature ±3σ clip from training data |
-| Semantic preservation | Per-attack-class minimum/maximum invariants |
-| Degree anomaly limit | Not applicable to C-PGD (edge injection only) |
+Constraint categories in `src/attack/constraints.py`:
 
-#### 3.3.3 Output Format (returned to frontend)
+- TCP flag validity.
+- Feature co-dependency recomputation for byte-rate/throughput fields.
+- Feature bounds from scaler statistics.
+- Semantic preservation constraints where defined.
+
+### 5.2 Other Modules
+
+Implemented but not all exposed in the web adversarial comparison endpoint:
+
+- Edge injection attack.
+- GAN/WGAN-GP adversarial flow generator.
+- TGN memory poisoning attack.
+- C-PGD adversarial training.
+
+---
+
+## 6. Backend API
+
+All REST endpoints are mounted under `/api`.
+
+### 6.1 Analysis Workflow
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/upload` | Upload `.csv`, create session, save `upload.csv` |
+| `POST` | `/analyze/{session_id}` | Start background inference |
+| `GET` | `/status/{session_id}` | Poll `idle/analyzing/ready/error` |
+| `GET` | `/graph/{session_id}` | Return Cytoscape graph, default max 2000 edges |
+| `GET` | `/alerts/{session_id}` | Return paginated alerts |
+| `GET` | `/timeline/{session_id}` | Return Plotly-compatible timeline |
+
+Upload constraints:
+
+- `.csv` extension only.
+- Maximum size: 50 MB.
+
+Allowed model names:
+
+```text
+graphsage | gat | tgat | tgn | ensemble
+```
+
+### 6.2 Adversarial
+
+`POST /api/adversarial`
 
 ```json
 {
-  "flow_id": "edge_47",
-  "original": {
-    "prediction": "DDoS",
-    "confidence": 0.942,
-    "features": { "IN_PKTS": 60.0, "IN_BYTES": 3000, "FLOW_DURATION_MILLISECONDS": 150, "..." : "..." }
-  },
-  "adversarial": {
-    "prediction": "Benign",
-    "confidence": 0.612,
-    "features": { "IN_PKTS": 47.3, "IN_BYTES": 2891, "FLOW_DURATION_MILLISECONDS": 150, "..." : "..." },
-    "csr": 1.0,
-    "changed_features": [
-      { "name": "IN_PKTS",  "original": 60.0, "adversarial": 47.3, "delta_pct": -21.2, "constraint_ok": true },
-      { "name": "IN_BYTES", "original": 3000,  "adversarial": 2891,  "delta_pct":  -3.6, "constraint_ok": true }
-    ]
-  }
+  "session_id": "uuid",
+  "flow_id": "e123",
+  "epsilon": 0.1,
+  "steps": 40
 }
 ```
 
----
+Returns original/adversarial prediction, confidence, raw-scale features, CSR, and changed features. HTTP 408 is returned if generation exceeds 30 seconds.
 
-## 4. Data Pipeline
+### 6.3 Explainability
 
-### 4.1 Directory Structure
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/explain/{session_id}` | Explain one `edge_idx` |
+| `POST` | `/explain-top/{session_id}` | Explain top-K confident alerts |
 
-```
-data/
-├── raw/
-│   ├── NF-UNSW-NB15-v2.csv
-│   └── NF-BoT-IoT-v2.csv
-├── processed/
-│   ├── static/
-│   │   ├── train/          # .pt 檔，每個時間窗口一個
-│   │   ├── val/
-│   │   ├── test/
-│   │   └── scaler.pkl      ← StandardScaler（攻擊模組使用）
-│   └── temporal/
-│       ├── train.pt
-│       ├── val.pt
-│       ├── test.pt
-│       └── scaler.pkl      ← StandardScaler（攻擊模組使用）
-└── adversarial/
-    ├── cpgd/
-    │   ├── eps0.10_steps40_seed42/     ← 超參數帶入路徑，避免覆蓋
-    │   │   ├── graphsage_test.pt
-    │   │   ├── gat_test.pt
-    │   │   ├── tgat_test.pt
-    │   │   └── tgn_test.pt
-    │   └── eps0.05_steps20_seed42/
-    ├── edge_injection/
-    │   └── n50_seed42/
-    └── gan/
-        └── seed42/
+Only `graphsage` and `gat` are accepted. Temporal models return HTTP 400 for explainability requests.
+
+### 6.4 Reports and Metrics
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/report/{session_id}` | Generate HTML/PDF report |
+| `GET` | `/report/{session_id}/download?format=pdf|html` | Download report |
+| `GET` | `/metrics` | Serve `data/metrics/reliability.json` or placeholders |
+
+### 6.5 Streaming
+
+```text
+ws://localhost:8000/api/ws/stream?model=graphsage&window_seconds=60
 ```
 
-### 4.2 Train/Val/Test Split
-
-Strictly chronological — no random shuffling to avoid temporal leakage:
-
-| Split | Proportion | Notes |
-|-------|-----------|-------|
-| Train | 60% | First 60% of flows by timestamp |
-| Val | 20% | Hyperparameter tuning（含攻擊超參數） |
-| Test | 20% | Final evaluation only; never used during development |
-
----
-
-## 5. Frontend Views
-
-All five views are Vue 3 single-file components under `frontend/src/views/`. They share state through Pinia stores and communicate with the backend via the axios API client in `frontend/src/api/`.
-
-### 5.1 View ① — Traffic Graph (`TrafficGraph.vue`)
-
-**Library:** Cytoscape.js
-
-**Data source:** `GET /api/graph/{session_id}`
-
-**Cytoscape.js element schema:**
-
-```typescript
-interface CyNode { data: { id: string; ip: string; riskScore: number } }
-interface CyEdge {
-  data: {
-    id: string; source: string; target: string
-    prediction: string; confidence: number; flowId: string
-  }
-}
-```
-
-**Visual encoding:**
-
-| Property | Meaning |
-|----------|---------|
-| Node colour | Max risk score among incident edges: green < 0.5, orange 0.5–0.8, red > 0.8 |
-| Node size | Degree (log-scaled) |
-| Edge colour | Attack class colour (Benign=grey, DoS=red, DDoS=orange, Recon=yellow, …) |
-| Edge width | Confidence score (thicker = higher confidence) |
-
-**Interaction:** Click a node → sidebar shows all incident alerts. Click an edge → open alert detail. "Generate adversarial" button on alert detail triggers View ⑤.
-
-**Performance limit:** Render at most 500 nodes and 2 000 edges; server-side truncation to top-N by confidence score before sending.
-
----
-
-### 5.2 View ② — Alert List (`AlertList.vue`)
-
-**Data source:** `GET /api/alerts/{session_id}?sort=confidence&page=1&limit=50`
-
-Each alert row displays:
-
-| Column | Source |
-|--------|--------|
-| Flow ID | edge index |
-| Src → Dst | IP:Port strings |
-| Attack type | argmax of GNN logits |
-| Confidence | softmax probability of predicted class |
-| Top-3 features | GAT attention weights (if model = GAT) or top-3 by ±σ deviation |
-| Action | "View adversarial" button |
-
-Filtering: by attack type, confidence threshold slider, time window selector.
-
----
-
-### 5.3 View ③ — Attack Timeline (`AttackTimeline.vue`)
-
-**Library:** Plotly.js stacked bar chart
-
-**Data source:** `GET /api/timeline/{session_id}`
-
-X-axis: time window index (60 s buckets)
-Y-axis: flow count per attack class
-Stacking: one colour per attack class (matches View ① edge colours)
-
-Click a bar → View ① zooms to that time window's flows.
-
----
-
-### 5.4 View ④ — Model Reliability Panel (`ReliabilityPanel.vue`)
-
-**Data source:** static file `data/metrics/reliability.json` (served by FastAPI as a static asset; pre-computed once offline)
+Client messages:
 
 ```json
-{
-  "graphsage": {
-    "clean_f1": 0.921,
-    "dr_under_cpgd_eps01": 0.743,
-    "delta_f1_after_adv_training": 0.058
-  },
-  "gat": {
-    "clean_f1": 0.934,
-    "dr_under_cpgd_eps01": 0.761,
-    "delta_f1_after_adv_training": 0.049
-  }
-}
+{"flows": [{"col": "value"}]}
+{"command": "flush"}
+{"command": "close"}
 ```
 
-**Display:**
+Server messages:
 
-- Three cards per model: "Clean F1", "DR under attack", "After adversarial training"
-- Before/After bar chart for ΔF1
-- Tooltip: "Detection Rate under C-PGD (ε=0.1, 40 steps) — percentage of adversarial flows still correctly classified"
-
----
-
-### 5.5 View ⑤ — Adversarial Comparison Report (`AdversarialReport.vue`)
-
-**Trigger:** user clicks "Generate adversarial" on an alert in View ②
-
-**API call:** `POST /api/adversarial` with `{ session_id, flow_id, epsilon, steps }`
-
-**Display — side-by-side comparison table:**
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Flow edge_47 │ Src: 10.0.0.4:6789  →  Dst: 10.0.0.5:22       │
-├──────────────────────┬──────────────────┬──────────────────────┤
-│ Feature              │ Original         │ Adversarial          │
-├──────────────────────┼──────────────────┼──────────────────────┤
-│ IN_PKTS              │ 60.0             │ 47.3  (−21.2%) 🔴    │
-│ IN_BYTES             │ 3 000            │ 2 891 ( −3.6%) 🔴    │
-│ FLOW_DURATION_MS     │ 150              │ 150   (  0.0%)       │
-│ SRC_TO_DST_BYTES/s   │ 20 000           │ 19 273 ← recomputed ✅│
-│ TCP_FLAGS            │ SYN (0x02)  ✅   │ SYN (0x02)        ✅ │
-├──────────────────────┴──────────────────┴──────────────────────┤
-│ Prediction:  DDoS  94.2%  →  Benign  61.2%                     │
-│ Constraint Satisfaction Rate:  1.0  ✅                          │
-└─────────────────────────────────────────────────────────────────┘
+```json
+{"type": "ack", "n_buffered": 42, "n_processed": 1000}
+{"type": "alerts", "window": 0, "alerts": [], "stats": {}}
+{"type": "error", "message": "Invalid JSON"}
 ```
 
-Row colours: red = changed feature, grey = unchanged. Green checkmark = constraint passed.
+---
 
-**Export button:** `GET /api/report/{session_id}` → downloads PDF/HTML.
+## 7. Frontend
+
+Frontend stack:
+
+- Vue 3
+- Vite
+- TypeScript
+- Vue Router
+- Pinia
+- Axios
+- Cytoscape.js
+- Plotly basic distribution
+
+Routes:
+
+| Path | Component | Purpose |
+|---|---|---|
+| `/` | `UploadView.vue` | Upload CSV and choose model |
+| `/graph` | `TrafficGraph.vue` | Cytoscape traffic graph |
+| `/alerts` | `AlertList.vue` | Alert table and pagination/filtering |
+| `/timeline` | `AttackTimeline.vue` | Plotly attack timeline |
+| `/reliability` | `ReliabilityPanel.vue` | Precomputed metrics |
+| `/adversarial` | `AdversarialReport.vue` | C-PGD comparison and report export |
+
+`frontend/src/stores/session.ts` is the single Pinia store. It tracks session ID, status, progress, graph nodes/edges, alerts, timeline, reliability metrics, selected flow, and adversarial result. It polls `/status/{session_id}` every 2 seconds and stops on `ready` or `error`.
+
+API base URL is `VITE_API_BASE_URL` or `http://localhost:8000` by default.
 
 ---
 
-## 6. API Design
+## 8. Current Experiment Results
 
-Base URL: `http://localhost:8000/api`
+The current tracked metrics file is `data/metrics/reliability.json`.
 
-| Method | Path | Description | Request | Response |
-|--------|------|-------------|---------|----------|
-| `POST` | `/upload` | Upload CSV, create session | `multipart/form-data` file | `{ session_id, n_flows }` |
-| `POST` | `/analyze/{session_id}` | Run GNN inference on uploaded data | `{ model: "graphsage"\|"gat" }` | `{ status }` (async — poll `/status`) |
-| `GET` | `/status/{session_id}` | Poll analysis progress | — | `{ status, progress_pct }` |
-| `GET` | `/graph/{session_id}` | Cytoscape.js elements (truncated) | `?max_edges=2000` | `{ nodes[], edges[] }` |
-| `GET` | `/alerts/{session_id}` | Paginated alert list | `?sort&page&limit&attack_type` | `{ alerts[], total }` |
-| `GET` | `/timeline/{session_id}` | Per-window attack counts | — | Plotly-compatible JSON |
-| `POST` | `/adversarial` | Run C-PGD on one flow | `{ session_id, flow_id, epsilon, steps }` | adversarial comparison JSON (Section 3.3.3) |
-| `GET` | `/report/{session_id}` | Download PDF report | `?format=pdf\|html` | binary file |
-| `GET` | `/metrics` | Static model reliability metrics | — | `reliability.json` content |
+| Model | Clean test F1 | Precision | Recall | ROC-AUC | Notes |
+|---|---:|---:|---:|---:|---|
+| GraphSAGE | 0.9712 | 0.9792 | 0.9660 | 0.9992 | Latest clean static metric/log |
+| GAT | 0.9534 | n/a | n/a | n/a | Clean F1 from reliability metrics |
+| TGAT | 0.9475 | 0.9632 | 0.9391 | 0.9963 | Temporal, 30 epochs |
+| TGN | 0.9464 | 0.9619 | 0.9350 | 0.9959 | Temporal, 30 epochs |
+| GraphSAGE + adv training | 0.9753 | 0.9803 | 0.9727 | 0.9997 | C-PGD augmented training, eps=0.1, steps=10, ratio=0.3 |
+| GAT + adv training | 0.9622 | 0.9696 | 0.9581 | 0.9965 | C-PGD augmented training, eps=0.1, steps=10, ratio=0.3 |
 
-**Error handling:** all endpoints return `{ detail: string }` with appropriate HTTP status on failure. Analysis errors (e.g. malformed CSV, unsupported columns) return `422`.
+Reliability deltas currently recorded:
 
----
+| Model | `delta_f1_after_adv_training` |
+|---|---:|
+| GraphSAGE | 0.0041 |
+| GAT | 0.0088 |
+| TGAT | null |
+| TGN | null |
 
-## 7. Report Generation
-
-**Template:** `app/templates/report.html.j2` (Jinja2)
-
-**Sections in generated report:**
-
-1. **Summary** — session timestamp, uploaded filename, total flows, attack/benign ratio
-2. **Top Alerts** — table of top-20 alerts by confidence, with attack type and source/destination
-3. **Attack Distribution** — embedded Plotly PNG of the timeline chart
-4. **Traffic Graph Snapshot** — static PNG export of Cytoscape.js graph (generated server-side with `cytoscape-png` or Selenium headless)
-5. **Model Reliability** — the three metric cards from View ④
-6. **Adversarial Sample Analysis** — the comparison table(s) for any flows the user generated adversarial examples for
-7. **Methodology Note** — brief description of models used, constraint enforcement, and dataset reference
-
-**PDF generation:** `WeasyPrint` converts the rendered HTML to PDF. The same Jinja2 template renders both HTML download and PDF — the only difference is whether the browser renders it or WeasyPrint does.
-
----
-## 8. Demo Dataset Strategy
-
-The repository includes a curated 1 000-flow demo CSV (`data/demo/demo_flows.csv`) so reviewers and users can try the tool without downloading the full NF-UNSW-NB15-v2 dataset (~2.5 M flows).
-
-**Curation criteria:**
-
-| Criterion | Value |
-|-----------|-------|
-| Total flows | 1 000 |
-| Benign flows | ~400 (40 %) |
-| Attack flows | ~600 (60 %, balanced across attack types) |
-| Time span | 10 minutes of synthetic-realistic traffic |
-| Attack types included | DoS, Reconnaissance, Exploits, Backdoor, Fuzzers |
-
-**How it was built:**
-
-1. Stratified sample from the NF-UNSW-NB15-v2 test split (chronological order preserved).
-2. All 34 NF features retained; no feature engineering applied.
-3. Verified that `static_builder.py` produces at least 3 non-trivial time windows.
-4. Adversarial comparison: 10 high-confidence attack flows pre-selected and their C-PGD adversarial counterparts pre-computed (`data/demo/demo_adversarial.json`).
-
-The demo CSV is tracked by git. The full datasets are not.
+`dr_under_cpgd_eps01` is currently `null` for all models in the metrics file.
 
 ---
 
-## 9. Milestones
+## 9. Operations
 
-### Phase 1 — Core Tool (Weeks 1–8)
+Backend:
 
-| Week | Milestone | Deliverable |
-|------|-----------|-------------|
-| 1–2 | Project scaffold | FastAPI app skeleton, Vue 3 + Vite scaffold, Pinia stores, API client |
-| 3 | Data pipeline | `static_builder.py` tested on demo CSV; PyG Data objects generated |
-| 4 | GNN training | GraphSAGE + GAT trained on NF-UNSW-NB15-v2; checkpoints saved |
-| 5 | Inference service | `POST /analyze` returns graph JSON + alert list |
-| 6 | Traffic graph view | Cytoscape.js rendering; click-to-inspect nodes |
-| 7 | Alert list + timeline | Alert list with feature importance; Plotly.js stacked bar chart |
-| 8 | Model reliability panel | `compute_reliability_metrics.py`; pre-computed `reliability.json` served |
+```bash
+uv sync
+uv run uvicorn app.main:app --reload --port 8000
+```
 
-### Phase 2 — Adversarial & Depth (Weeks 9–12) ✅
+Frontend:
 
-| Week | Milestone | Deliverable | Status |
-|------|-----------|-------------|--------|
-| 9 | C-PGD module | `src/attack/cpgd.py`; constraint projection; CSR = 1.0 enforced | ✅ |
-| 10 | Adversarial comparison view | Side-by-side table; delta% per feature; constraint status indicators | ✅ |
-| 10 | Edge Injection attack | `src/attack/edge_injection.py`; structure-based attack | ✅ |
-| 10 | GAN attack | `src/attack/gan_generator.py`; WGAN-GP adversarial flow generator | ✅ |
-| 10 | Adversarial training | `src/defense/adversarial_training.py`; C-PGD augmented training | ✅ |
-| 11 | Report generation | Jinja2 template; WeasyPrint PDF; HTML download | ✅ |
-| 11 | Attack CLI | `attack.py` Hydra entry point for all attack methods | ✅ |
-| 12 | Demo polish + docs | `data/demo/` curated; README updated | ✅ |
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-### Phase 3 — Temporal Models ✅
+Static data build:
 
-| Item | Deliverable | Status |
-|------|-------------|--------|
-| TGAT model | `src/models/tgat.py` — stateless temporal graph attention | ✅ |
-| TGN model | `src/models/tgn.py` — GRU-based temporal graph network | ✅ |
-| Web app integration | TGAT/TGN selectable in frontend; temporal inference backend | ✅ |
-| PCAP conversion | `scripts/pcap_to_netflow.py` — nfstream-based PCAP → NetFlow CSV | ✅ |
-| Memory Poisoning Attack | Visualization of temporal model memory manipulation | Future |
+```bash
+uv run python src/data/static_builder.py
+```
+
+Temporal data build:
+
+```bash
+uv run python src/data/temporal_builder.py
+```
+
+Tests:
+
+```bash
+uv run pytest
+```
+
+Frontend build:
+
+```bash
+cd frontend
+npm run build
+```
 
 ---
 
-## 10. References
+## 10. Known Constraints
 
-**GNN Models**
-- Hamilton, W., et al. "Inductive Representation Learning on Large Graphs." *NeurIPS 2017.* — GraphSAGE
-- Veličković, P., et al. "Graph Attention Networks." *ICLR 2018.* — GAT
-- Xu, D., et al. "Inductive Representation Learning on Temporal Graphs." *ICLR 2020.* — TGAT
-- Rossi, E., et al. "Temporal Graph Networks for Deep Learning on Dynamic Graphs." *arXiv 2020.* — TGN
+- Web upload inference rebuilds temporary static graphs per request; this is acceptable for demo-sized CSVs but expensive for large files.
+- Offline static training uses 120-second windows, while web inference/explainability/streaming currently default to 60 seconds.
+- C-PGD web comparison builds a minimal single-edge graph with dummy node features. This is useful for reports but not identical to perturbing inside the original full graph context.
+- Temporal models can be loaded for inference when checkpoints are present, but explainability and C-PGD web comparison are static-model oriented.
+- Web inference loads complete model objects with `torch.load(..., weights_only=False)`, so checkpoints must be trusted.
+- `scaler.json` is preferred by C-PGD; `scaler.pkl` remains a fallback.
+- Session storage is local filesystem state, not distributed storage.
 
-**GNN-based NIDS**
-- Lo, W. W., et al. "E-GraphSAGE: A GNN-based IDS for IoT." *IEEE NOMS 2022.*
-- Bilot, T., et al. "Graph Neural Networks for Intrusion Detection: A Survey." *IEEE Access 2023.*
+---
 
-**Adversarial Attacks on NIDS**
-- Han, D., et al. "Practical Traffic-Space Adversarial Attacks on Learning-Based NIDSs." *USENIX Security 2021.* — BAAAN
-- Pierazzi, F., et al. "Intriguing Properties of Adversarial ML Attacks in the Problem Space." *IEEE S&P 2020.*
-- Madry, A., et al. "Towards Deep Learning Models Resistant to Adversarial Attacks." *ICLR 2018.* — PGD
+## 11. References
+
+- Hamilton et al., "Inductive Representation Learning on Large Graphs", NeurIPS 2017.
+- Velickovic et al., "Graph Attention Networks", ICLR 2018.
+- Xu et al., "Inductive Representation Learning on Temporal Graphs", ICLR 2020.
+- Rossi et al., "Temporal Graph Networks for Deep Learning on Dynamic Graphs", arXiv 2020.
+- Madry et al., "Towards Deep Learning Models Resistant to Adversarial Attacks", ICLR 2018.
+- Pierazzi et al., "Intriguing Properties of Adversarial ML Attacks in the Problem Space", IEEE S&P 2020.
+- Han et al., "Practical Traffic-Space Adversarial Attacks on Learning-Based NIDSs", USENIX Security 2021.
+- Lo et al., "E-GraphSAGE: A GNN-based IDS for IoT", IEEE NOMS 2022.
+- Bilot et al., "Graph Neural Networks for Intrusion Detection: A Survey", IEEE Access 2023.
