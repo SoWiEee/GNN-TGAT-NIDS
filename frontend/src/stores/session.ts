@@ -4,6 +4,7 @@ import { api } from '@/api'
 import type { Alert, CyNode, CyEdge, TimelineResponse, ReliabilityMetrics, AdversarialResult } from '@/api'
 
 export const useSessionStore = defineStore('session', () => {
+  const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
   const sessionId = ref<string | null>(null)
   const status = ref<'idle' | 'uploading' | 'analyzing' | 'ready' | 'error'>('idle')
   const progressPct = ref(0)
@@ -72,6 +73,12 @@ export const useSessionStore = defineStore('session', () => {
     status.value = 'uploading'
     errorMessage.value = ''
     progressPct.value = 0
+
+    if (file.size > MAX_UPLOAD_BYTES) {
+      status.value = 'error'
+      errorMessage.value = `File too large: ${(file.size / 1024 / 1024).toFixed(1)} MB. Max is 50 MB.`
+      return
+    }
 
     try {
       const { data: uploadData } = await api.upload(file)

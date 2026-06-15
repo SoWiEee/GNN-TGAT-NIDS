@@ -4,5 +4,5 @@ const baseURL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'ht
 
 export const apiClient = axios.create({
   baseURL: `${baseURL}/api`,
-  timeout: 60_000,
+  timeout: 300_000,
 })
