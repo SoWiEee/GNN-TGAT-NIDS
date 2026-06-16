@@ -119,6 +119,27 @@ Evaluated on NF-UNSW-NB15-v2 test split (~397K flows, 3312 windows).
 | E-GraphSAGE | 0.9708 | — | not yet trained |
 | TGAT / TGN | — | — | not yet trained |
 
+### Macro F1 Improvement
+
+Using `sqrt_inverse` class weights + `focal_gamma=3.0` + `val_metric=macro_f1` checkpoint selection:
+
+| Metric | Baseline | Improved | Δ |
+|--------|:--------:|:--------:|:-:|
+| Macro F1 | 0.4657 | **0.4714** | **+0.0057** |
+| Weighted F1 | 0.9712 | 0.9681 | -0.0031 |
+| Shellcode F1 | 0.466 | **0.535** | **+0.069** |
+| Worms F1 | 0.116 | **0.193** | **+0.077** |
+
+Trade-off: slight weighted F1 drop for better rare-class detection. Configure via:
+
+```bash
+uv run python train.py model=graphsage \
+    train.class_weight_strategy=sqrt_inverse \
+    train.focal_gamma=3.0 \
+    train.val_metric=macro_f1 \
+    train.patience=15
+```
+
 ### Per-Class F1 (Ensemble)
 
 | Class | Support | F1 | Note |

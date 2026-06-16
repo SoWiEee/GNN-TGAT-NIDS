@@ -14,6 +14,8 @@ train:
   use_amp: true         # automatic mixed precision (CUDA only)
   loss: focal           # "focal" | "cross_entropy"
   focal_gamma: 2.0      # focusing exponent (ignored when loss=cross_entropy)
+  class_weight_strategy: inverse   # "inverse" | "effective" | "sqrt_inverse"
+  val_metric: f1                   # "f1" (weighted) | "macro_f1" for checkpoint selection
   checkpoint_dir: ${paths.checkpoints}/${hydra:runtime.choices.model}
   patience: 0                  # early stopping patience (0 = disabled)
   adversarial_training: false  # enable C-PGD augmented training

@@ -48,7 +48,7 @@ def _build_static_loaders(cfg: DictConfig) -> tuple:
 
 
 def _compute_class_weights(
-    loader: DataLoader, n_classes: int, device: torch.device
+    loader: DataLoader, n_classes: int, device: torch.device, strategy: str = "inverse",
 ) -> torch.Tensor:
     """Aggregate all y_multi labels from the loader to compute class weights."""
     from src.eval.metrics import compute_class_weights
@@ -57,7 +57,7 @@ def _compute_class_weights(
     for data in loader:
         all_labels.append(data.y_multi)
     all_labels_t = torch.cat(all_labels, dim=0)
-    return compute_class_weights(all_labels_t, n_classes, device=device)
+    return compute_class_weights(all_labels_t, n_classes, device=device, strategy=strategy)
 
 
 def _train_epoch(
@@ -134,6 +134,8 @@ def _evaluate(
     y_proba = torch.cat(all_proba)
 
     metrics = compute_metrics(y_true, y_pred, y_proba)
+    macro = compute_metrics(y_true, y_pred, y_proba=None, average="macro")
+    metrics["macro_f1"] = macro["f1"]
     metrics["loss"] = total_loss / max(total_edges, 1)
     return metrics
 
@@ -170,11 +172,12 @@ def _build_temporal_loaders(cfg: DictConfig) -> tuple:
 
 
 def _compute_class_weights_temporal(
-    loader: TemporalDataLoader, n_classes: int, device: torch.device
+    loader: TemporalDataLoader, n_classes: int, device: torch.device,
+    strategy: str = "inverse",
 ) -> torch.Tensor:
     from src.eval.metrics import compute_class_weights
     all_labels = [batch.y for batch in loader]
-    return compute_class_weights(torch.cat(all_labels), n_classes, device=device)
+    return compute_class_weights(torch.cat(all_labels), n_classes, device=device, strategy=strategy)
 
 
 def _train_epoch_temporal(
@@ -249,9 +252,12 @@ def _evaluate_temporal(
         all_pred.append(pred.cpu())
         all_proba.append(proba.cpu())
 
-    metrics = compute_metrics(
-        torch.cat(all_true), torch.cat(all_pred), torch.cat(all_proba)
-    )
+    y_true_cat = torch.cat(all_true)
+    y_pred_cat = torch.cat(all_pred)
+    y_proba_cat = torch.cat(all_proba)
+    metrics = compute_metrics(y_true_cat, y_pred_cat, y_proba_cat)
+    macro = compute_metrics(y_true_cat, y_pred_cat, y_proba=None, average="macro")
+    metrics["macro_f1"] = macro["f1"]
     metrics["loss"] = total_loss / max(total_edges, 1)
     return metrics
 
@@ -321,11 +327,13 @@ def main(cfg: DictConfig) -> None:
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.train.lr)
 
     # Loss function — class weights always applied; focal loss reduces recall gap
+    cw_strategy = cfg.train.get("class_weight_strategy", "inverse")
     class_weights = (
-        _compute_class_weights_temporal(train_loader, n_classes, device)
+        _compute_class_weights_temporal(train_loader, n_classes, device, strategy=cw_strategy)
         if is_temporal
-        else _compute_class_weights(train_loader, n_classes, device)
+        else _compute_class_weights(train_loader, n_classes, device, strategy=cw_strategy)
     )
+    log.info("class_weight_strategy=%s  weights=%s", cw_strategy, class_weights.cpu().tolist())
     loss_type = cfg.train.get("loss", "focal")
     if loss_type == "focal":
         from src.eval.losses import FocalLoss
@@ -336,29 +344,38 @@ def main(cfg: DictConfig) -> None:
         criterion = torch.nn.CrossEntropyLoss(weight=class_weights)
         log.info("loss=CrossEntropyLoss")
 
+    # ── Training config ─────────────────────────────────────────────────────
+    epochs = cfg.train.epochs
+    save_every = cfg.train.save_every
+    val_every = cfg.train.get("val_every", 1)
+    patience = int(cfg.train.get("patience", 0))
+    val_metric_key = cfg.train.get("val_metric", "f1")
+    log.info("val_metric=%s (checkpoint selection)", val_metric_key)
+
     # ── Checkpoint resume ────────────────────────────────────────────────────
     ckpt_dir = Path(cfg.train.checkpoint_dir)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     start_epoch = 0
 
     resume_path = ckpt_dir / "latest.pt"
-    best_val_f1 = 0.0
+    best_val_score = 0.0
     if resume_path.exists():
         start_epoch = load_checkpoint(model, optimizer, str(resume_path), map_location=device)
-        # Restore best_val_f1 so resume never overwrites a better checkpoint
         best_ckpt_path = ckpt_dir / "best.pt"
         if best_ckpt_path.exists():
-            best_payload = torch.load(best_ckpt_path, map_location="cpu", weights_only=True)
-            best_val_f1 = best_payload.get("extra", {}).get("val_metrics", {}).get("f1", 0.0)
-            if best_val_f1 > 0:
-                log.info("Restored best_val_f1=%.4f from best checkpoint", best_val_f1)
+            best_payload = torch.load(
+                best_ckpt_path, map_location="cpu", weights_only=True,
+            )
+            stored = best_payload.get("extra", {}).get("val_metrics", {})
+            best_val_score = stored.get(val_metric_key, stored.get("f1", 0.0))
+            if best_val_score > 0:
+                log.info(
+                    "Restored best val_%s=%.4f from best checkpoint",
+                    val_metric_key, best_val_score,
+                )
         log.info("Resumed from epoch %d", start_epoch)
 
     # ── Training loop ────────────────────────────────────────────────────────
-    epochs = cfg.train.epochs
-    save_every = cfg.train.save_every
-    val_every = cfg.train.get("val_every", 1)
-    patience = int(cfg.train.get("patience", 0))
     epochs_no_improve = 0
 
     # ── Adversarial training setup ──────────────────────────────────────────
@@ -414,8 +431,9 @@ def main(cfg: DictConfig) -> None:
             else _evaluate(model, val_loader, criterion, device)
         )
         log.info(
-            "epoch %d/%d | train_loss=%.4f | val_f1=%.4f | val_loss=%.4f",
-            epoch + 1, epochs, train_loss, val_metrics["f1"], val_metrics["loss"],
+            "epoch %d/%d | train_loss=%.4f | val_f1=%.4f | val_macro_f1=%.4f | val_loss=%.4f",
+            epoch + 1, epochs, train_loss,
+            val_metrics["f1"], val_metrics.get("macro_f1", 0.0), val_metrics["loss"],
         )
 
         save_checkpoint(model, optimizer, epoch + 1, str(resume_path))
@@ -426,8 +444,9 @@ def main(cfg: DictConfig) -> None:
                 str(ckpt_dir / f"epoch{epoch + 1:04d}.pt"),
             )
 
-        if val_metrics["f1"] > best_val_f1:
-            best_val_f1 = val_metrics["f1"]
+        current_score = val_metrics.get(val_metric_key, val_metrics["f1"])
+        if current_score > best_val_score:
+            best_val_score = current_score
             epochs_no_improve = 0
             save_checkpoint(
                 model, optimizer, epoch + 1,
@@ -439,7 +458,12 @@ def main(cfg: DictConfig) -> None:
             inference_path = ckpt_dir.parent / f"{model_key}{suffix}"
             torch.save(model.cpu(), inference_path)
             model.to(device)
-            log.info("New best val_f1=%.4f → %s", best_val_f1, inference_path)
+            log.info(
+                "New best val_%s=%.4f (weighted_f1=%.4f, macro_f1=%.4f) → %s",
+                val_metric_key, best_val_score,
+                val_metrics["f1"], val_metrics.get("macro_f1", 0.0),
+                inference_path,
+            )
         else:
             epochs_no_improve += 1
             if patience > 0 and epochs_no_improve >= patience:
@@ -463,8 +487,9 @@ def main(cfg: DictConfig) -> None:
         test_metrics = _evaluate(model, test_loader, criterion, device)
 
     log.info(
-        "TEST | f1=%.4f | precision=%.4f | recall=%.4f | roc_auc=%.4f",
+        "TEST | f1=%.4f | macro_f1=%.4f | precision=%.4f | recall=%.4f | roc_auc=%.4f",
         test_metrics.get("f1", 0.0),
+        test_metrics.get("macro_f1", 0.0),
         test_metrics.get("precision", 0.0),
         test_metrics.get("recall", 0.0),
         test_metrics.get("roc_auc", 0.0),

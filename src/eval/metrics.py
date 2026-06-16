@@ -154,12 +154,23 @@ def compute_class_weights(
     labels: torch.Tensor | np.ndarray,
     n_classes: int,
     device: torch.device | str = "cpu",
+    strategy: str = "inverse",
 ) -> torch.Tensor:
-    """Compute inverse-frequency class weights for weighted CrossEntropyLoss.
+    """Compute per-class weights for loss functions.
 
-    weight_c = N / (n_classes * count_c)
-
-    Classes with zero samples receive weight 0 to avoid division by zero.
+    Strategies
+    ----------
+    ``"inverse"``
+        Standard inverse-frequency: ``weight_c = N / (n_classes * count_c)``.
+    ``"effective"``
+        Effective number of samples (Cui et al. 2019):
+        ``weight_c = (1 - beta) / (1 - beta^count_c)`` where
+        ``beta = (N - 1) / N``.  Provides smoother scaling under
+        extreme imbalance — avoids the 5000x weight ratio that
+        raw inverse-frequency produces with NF-UNSW-NB15-v2.
+    ``"sqrt_inverse"``
+        Square-root damped inverse-frequency:
+        ``weight_c = sqrt(N / (n_classes * count_c))``.
 
     Parameters
     ----------
@@ -169,11 +180,13 @@ def compute_class_weights(
         Total number of classes.
     device:
         Target device for the returned tensor.
+    strategy:
+        Weighting strategy (``"inverse"``, ``"effective"``, ``"sqrt_inverse"``).
 
     Returns
     -------
     torch.Tensor
-        Shape ``(n_classes,)`` of dtype float32.
+        Shape ``(n_classes,)`` of dtype float32, normalised so ``mean == 1``.
     """
     if isinstance(labels, torch.Tensor):
         labels = labels.cpu().numpy()
@@ -182,9 +195,24 @@ def compute_class_weights(
     n = len(labels)
     weights = np.zeros(n_classes, dtype=np.float32)
 
-    for c in range(n_classes):
-        count = (labels == c).sum()
-        if count > 0:
-            weights[c] = n / (n_classes * count)
+    if strategy == "effective":
+        beta = (n - 1) / n
+        for c in range(n_classes):
+            count = int((labels == c).sum())
+            if count > 0:
+                weights[c] = (1.0 - beta) / (1.0 - beta ** count)
+    elif strategy == "sqrt_inverse":
+        for c in range(n_classes):
+            count = (labels == c).sum()
+            if count > 0:
+                weights[c] = np.sqrt(n / (n_classes * count))
+    else:
+        for c in range(n_classes):
+            count = (labels == c).sum()
+            if count > 0:
+                weights[c] = n / (n_classes * count)
+
+    if weights.sum() > 0:
+        weights = weights / weights.mean()
 
     return torch.tensor(weights, dtype=torch.float32, device=device)

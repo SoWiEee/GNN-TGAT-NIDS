@@ -97,6 +97,66 @@ Enabled by default on CUDA via `train.use_amp=true`. Uses `torch.amp.autocast` +
 
 ---
 
+## Macro F1 Improvement
+
+NF-UNSW-NB15-v2 has extreme class imbalance (Benign 93%, rarest 5 attack types < 1%). This causes low macro F1 despite high weighted F1. Three mechanisms address this:
+
+### 1. Class Weight Strategy
+
+```yaml
+train:
+  class_weight_strategy: sqrt_inverse  # "inverse" | "effective" | "sqrt_inverse"
+```
+
+| Strategy | Formula | Effect |
+|---|---|---|
+| `inverse` (default) | `N / (C × count_c)` | Standard inverse-frequency. Can produce 5000:1 weight ratios |
+| `effective` | `(1-β) / (1-β^count_c)` | Cui et al. 2019. Smoother scaling, but collapses Benign detection under extreme imbalance |
+| `sqrt_inverse` | `√(N / (C × count_c))` | Damped inverse-frequency. Best balance for this dataset |
+
+### 2. Validation Metric Selection
+
+```yaml
+train:
+  val_metric: macro_f1  # "f1" (weighted) | "macro_f1"
+```
+
+Using `macro_f1` for checkpoint selection forces the model to optimize for rare-class performance rather than Benign-dominated weighted F1.
+
+### 3. Focal Loss Gamma
+
+Higher `focal_gamma` increases focus on hard-to-classify rare samples:
+
+```yaml
+train:
+  focal_gamma: 3.0  # default 2.0, increase for more rare-class focus
+```
+
+### Recommended Configuration
+
+```bash
+uv run python train.py model=graphsage \
+    train.class_weight_strategy=sqrt_inverse \
+    train.focal_gamma=3.0 \
+    train.val_metric=macro_f1 \
+    train.patience=15
+```
+
+### Experiment Results (GraphSAGE)
+
+| Config | Weighted F1 | Macro F1 | Shellcode F1 | Worms F1 |
+|--------|:-----------:|:--------:|:------------:|:--------:|
+| Baseline (`inverse`, γ=2.0, val=f1) | **0.9712** | 0.4657 | 0.466 | 0.116 |
+| `effective`, γ=2.0, val=macro_f1 | 0.0300 | — | — | — |
+| `sqrt_inverse`, γ=3.0, val=macro_f1 | 0.9681 | **0.4714** | **0.535** | **0.193** |
+
+**Key findings:**
+- `effective` weights are too aggressive for NF-UNSW-NB15-v2 — they reduce Benign weight to ~0.0003, collapsing overall detection
+- `sqrt_inverse` + higher gamma provides the best trade-off: +0.0057 macro F1, +0.069 Shellcode F1, +0.077 Worms F1, with only -0.003 weighted F1
+- Further improvements likely require oversampling, threshold calibration, or hierarchical classification
+
+---
+
 ## Hyperparameter Search (Optuna)
 
 ```bash
