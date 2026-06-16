@@ -40,7 +40,7 @@
 
 | 優先級 | 問題 | 面向 |
 |--------|------|------|
-| 🟡 | 無 Dockerfile / docker-compose，部署門檻偏高 | DEP |
+| ✅ | Docker GPU 部署已就緒（Dockerfile + docker-compose + nginx proxy） | DEP |
 | 🟡 | WebSocket 串流推論缺少認證和 rate limiting | SEC |
 | 🟡 | Memory poisoning 端點允許外部修改 TGN 記憶體，需要存取控制 | SEC |
 | 🟢 | 模型 checkpoint 用 `weights_only=False` 載入（受信環境可接受） | SEC |
@@ -50,28 +50,9 @@
 
 ## 2. 待解決問題
 
-### 2.1 無 Docker 設定 🟡 DEP（v1.0 遺留）
+### ~~2.1 Docker 設定~~ ✅ 已解決
 
-README Quick Start 仍需手動安裝 uv、PyTorch、PyG extensions、Node.js。
-
-**建議：**
-
-```yaml
-# docker-compose.yml (CPU demo mode)
-services:
-  backend:
-    build: .
-    ports: ["8000:8000"]
-    volumes:
-      - ./checkpoints:/app/checkpoints
-      - ./data:/app/data
-    environment:
-      - ALLOWED_ORIGINS=http://localhost:5173
-  frontend:
-    build: ./frontend
-    ports: ["5173:80"]
-    depends_on: [backend]
-```
+GPU-enabled Docker 部署已就緒：`Dockerfile`（PyTorch 2.6.0 + CUDA 12.4）、`frontend/Dockerfile`（nginx SPA + API proxy）、`docker-compose.yml`（NVIDIA runtime + healthcheck）。README 已加入 Docker Quick Start。
 
 ### 2.2 WebSocket 缺少存取控制 🟡 SEC
 
@@ -173,7 +154,7 @@ ENABLE_ATTACK_ENDPOINTS = os.getenv("ENABLE_ATTACK_ENDPOINTS", "false").lower() 
 
 | 編號 | 問題 | 面向 | 嚴重度 | 建議行動 |
 |------|------|------|--------|----------|
-| R11 | 無 Dockerfile，部署門檻高 | DEP | 🟡 | 建立 docker-compose CPU 模式 |
+| ~~R11~~ | ~~Docker 部署~~ | DEP | ✅ | 已完成：GPU Dockerfile + compose + nginx |
 | R16 | WebSocket 缺認證和 rate limiting | SEC | 🟡 | token 驗證 + 並發限制 |
 | R17 | Memory poisoning 端點無存取控制 | SEC | 🟡 | 環境變數開關 |
 | R18 | torch.load weights_only=False | SEC | 🟢 | 公開部署改 state_dict |
@@ -186,7 +167,7 @@ ENABLE_ATTACK_ENDPOINTS = os.getenv("ENABLE_ATTACK_ENDPOINTS", "false").lower() 
 ### 高優先（公開部署前）
 
 ```
-[ ] R11: 建立 docker-compose.yml + Dockerfile (CPU demo mode)
+[x] R11: Docker GPU 部署（Dockerfile + docker-compose + nginx proxy + healthcheck）
 [ ] R16: WebSocket 加入連線數限制和 token 驗證
 [ ] R17: Memory poisoning 端點加入環境變數開關
 ```
@@ -195,7 +176,6 @@ ENABLE_ATTACK_ENDPOINTS = os.getenv("ENABLE_ATTACK_ENDPOINTS", "false").lower() 
 
 ```
 [ ] R19: 前端整合 temporal explainability 視覺化
-[ ] README 加入 "One-command demo" 區塊 (docker compose up)
 ```
 
 ### 低優先（長期改善）

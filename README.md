@@ -130,6 +130,35 @@ The FastAPI backend starts automatically when the frontend makes its first reque
 uv run uvicorn app.main:app --reload --port 8000
 ```
 
+### Docker (GPU)
+
+Run the full stack with one command — requires [Docker](https://docs.docker.com/get-docker/) and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html).
+
+```bash
+# Build and start backend (GPU) + frontend (nginx)
+docker compose up --build
+
+# Frontend:  http://localhost
+# Backend:   http://localhost:8000
+# API proxy: http://localhost/api/*  (via nginx)
+```
+
+Mount trained checkpoints and raw data from the host:
+
+```
+checkpoints/          → /app/checkpoints   (model weights)
+data/raw/             → /app/data/raw      (upload datasets)
+data/processed/       → /app/data/processed
+data/metrics/         → /app/data/metrics  (reliability panel)
+data/sessions/        → /app/data/sessions (analysis sessions)
+```
+
+To run training inside the container:
+
+```bash
+docker compose exec backend uv run python train.py model=graphsage
+```
+
 ---
 
 ## Training Optimization
