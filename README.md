@@ -100,18 +100,43 @@ flowchart LR
 
 ## Model Performance
 
-Evaluated on NF-UNSW-NB15-v2 test split (~2M flows, 3312 windows).
+Evaluated on NF-UNSW-NB15-v2 test split (~397K flows, 3312 windows).
 
-| Metric | GraphSAGE | GAT | E-GraphSAGE | TGAT | TGN | Ensemble (3-model) |
-|--------|:---------:|:---:|:-----------:|:----:|:---:|:------------------:|
+| Metric | GraphSAGE | GAT | E-GraphSAGE | TGAT | TGN | Ensemble (3) |
+|--------|:---------:|:---:|:-----------:|:----:|:---:|:------------:|
 | **Weighted F1** | **0.9712** | **0.9534** | **0.9708** | **0.9475** | **0.9463** | **0.9700** |
 | Macro F1 | 0.4657 | 0.3164 | 0.4681 | 0.3643 | 0.3438 | 0.4510 |
-| Precision / Recall | 0.9792 / 0.9660 | 0.9729 / 0.9433 | 0.9784 / 0.9665 | 0.9632 / 0.9391 | 0.9610 / 0.9351 | 0.9794 / 0.9650 |
+| Precision / Recall | 0.979 / 0.966 | 0.973 / 0.943 | 0.978 / 0.967 | 0.963 / 0.939 | 0.961 / 0.935 | 0.979 / 0.965 |
 | ROC-AUC | 0.9992 | 0.9963 | 0.9991 | 0.9963 | 0.9960 | 0.9992 |
-| DR@C-PGD (ε=0.1, 40 steps) | 1.0000 | 1.0000 | 1.0000 | 1.0000* | 0.9989* | — |
-| ΔF1 after adv. training | +0.0041 | +0.0087 | — | — | — | — |
+| DR@C-PGD ε=0.1 | 1.0000 | 1.0000 | 1.0000 | 1.0000* | 0.9989* | — |
 
-`*` Temporal C-PGD DR uses 256 warm-up + 32 attacked batches. Ensemble uses soft-vote (GraphSAGE + GAT + E-GraphSAGE) with learned validation-based weights.
+### Adversarial Training
+
+| Model | Clean F1 | Adv-Trained F1 | ΔF1 |
+|-------|:--------:|:--------------:|:---:|
+| GraphSAGE | 0.9712 | 0.9753 | **+0.0041** |
+| GAT | 0.9534 | 0.9622 | **+0.0087** |
+| E-GraphSAGE | 0.9708 | — | not yet trained |
+| TGAT / TGN | — | — | not yet trained |
+
+### Per-Class F1 (Ensemble)
+
+| Class | Support | F1 | Note |
+|-------|--------:|:--:|------|
+| Benign | 369,299 | 0.993 | 93% of test set |
+| Exploits | 11,986 | 0.747 | |
+| Fuzzers | 7,502 | 0.727 | |
+| Reconnaissance | 4,330 | 0.719 | |
+| Shellcode | 576 | 0.417 | |
+| Generic | 1,527 | 0.307 | confused with DoS/Exploits |
+| DoS | 1,587 | 0.206 | confused with Exploits |
+| Backdoor | 234 | 0.162 | |
+| Analysis | 239 | 0.146 | |
+| Worms | 69 | 0.086 | only 69 test samples |
+
+> **Why is Macro F1 low?** NF-UNSW-NB15-v2 has extreme class imbalance — Benign accounts for 93% of the test set, while the 5 rarest attack types (DoS, Generic, Backdoor, Analysis, Worms) together represent <1%. Macro F1 weights all 10 classes equally, so the low F1 on rare classes (~0.08-0.42) drags the average down despite near-perfect Benign detection. The model effectively learns a strong binary classifier (Benign vs. Attack) but cannot reliably distinguish between attack subtypes with <2000 samples. Potential mitigations: per-class oversampling, threshold calibration, or hierarchical classification (binary first, then attack subtype).
+
+`*` Temporal C-PGD DR uses 256 warm-up + 32 attacked batches. Ensemble: soft-vote over GraphSAGE + GAT + E-GraphSAGE with validation-based weights.
 
 ---
 
