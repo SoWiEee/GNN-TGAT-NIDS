@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { api } from '@/api'
-import type { Alert, CyNode, CyEdge, TimelineResponse, ReliabilityMetrics, AdversarialResult } from '@/api'
+import type { Alert, CyNode, CyEdge, TimelineResponse, ReliabilityMetrics, AdversarialResult, ExplainResult } from '@/api'
 
 export const useSessionStore = defineStore('session', () => {
   const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -18,6 +18,9 @@ export const useSessionStore = defineStore('session', () => {
   const reliability = ref<ReliabilityMetrics | null>(null)
   const adversarialResult = ref<AdversarialResult | null>(null)
   const selectedFlowId = ref<string | null>(null)
+  const explainResults = ref<ExplainResult[]>([])
+  const explainLoading = ref(false)
+  const selectedModel = ref('graphsage')
 
   const isReady = computed(() => status.value === 'ready')
 
@@ -112,6 +115,28 @@ export const useSessionStore = defineStore('session', () => {
     adversarialResult.value = data
   }
 
+  async function explainFlow(edgeIdx: number, model: string, epochs = 200) {
+    if (!sessionId.value) return
+    explainLoading.value = true
+    try {
+      const { data } = await api.explainFlow(sessionId.value, model, edgeIdx, epochs)
+      explainResults.value = [data]
+    } finally {
+      explainLoading.value = false
+    }
+  }
+
+  async function explainTopAlerts(model: string, topK = 5, epochs = 200) {
+    if (!sessionId.value) return
+    explainLoading.value = true
+    try {
+      const { data } = await api.explainTopAlerts(sessionId.value, model, topK, epochs)
+      explainResults.value = data
+    } finally {
+      explainLoading.value = false
+    }
+  }
+
   async function loadReliability() {
     const { data } = await api.getMetrics()
     reliability.value = data
@@ -130,12 +155,16 @@ export const useSessionStore = defineStore('session', () => {
     timeline.value = null
     adversarialResult.value = null
     selectedFlowId.value = null
+    explainResults.value = []
+    explainLoading.value = false
   }
 
   return {
     sessionId, status, progressPct, errorMessage,
     graphNodes, graphEdges, alerts, totalAlerts, timeline, reliability,
     adversarialResult, selectedFlowId, isReady,
-    uploadAndAnalyze, loadMoreAlerts, generateAdversarial, loadReliability, reset,
+    explainResults, explainLoading, selectedModel,
+    uploadAndAnalyze, loadMoreAlerts, generateAdversarial, loadReliability,
+    explainFlow, explainTopAlerts, reset,
   }
 })

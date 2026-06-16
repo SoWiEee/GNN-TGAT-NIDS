@@ -44,7 +44,7 @@
 | 🟡 | WebSocket 串流推論缺少認證和 rate limiting | SEC |
 | 🟡 | Memory poisoning 端點允許外部修改 TGN 記憶體，需要存取控制 | SEC |
 | 🟢 | 模型 checkpoint 用 `weights_only=False` 載入（受信環境可接受） | SEC |
-| 🟢 | 前端尚未整合 temporal explainability UI | FE |
+| ✅ | 前端已整合 explainability UI（靜態 + temporal） | FE |
 
 ---
 
@@ -89,9 +89,9 @@ ENABLE_ATTACK_ENDPOINTS = os.getenv("ENABLE_ATTACK_ENDPOINTS", "false").lower() 
 
 **建議（公開部署時）：** 改為 `state_dict` 載入，需同時儲存 Hydra config 以恢復模型類別。
 
-### 2.5 前端未整合 temporal explainability UI 🟢 FE
+### ~~2.5 前端 temporal explainability UI~~ ✅ 已解決
 
-後端 API（`/api/explain`）已支援 temporal attention 解釋，但前端尚未接入視覺化元件。
+ExplainView 元件已整合至前端：支援 5 種模型的 Top-K 解釋、特徵重要性長條圖、AlertList 快捷按鈕。靜態模型使用 GNNExplainer，temporal 模型使用 integrated gradients。
 
 ---
 
@@ -158,7 +158,7 @@ ENABLE_ATTACK_ENDPOINTS = os.getenv("ENABLE_ATTACK_ENDPOINTS", "false").lower() 
 | R16 | WebSocket 缺認證和 rate limiting | SEC | 🟡 | token 驗證 + 並發限制 |
 | R17 | Memory poisoning 端點無存取控制 | SEC | 🟡 | 環境變數開關 |
 | R18 | torch.load weights_only=False | SEC | 🟢 | 公開部署改 state_dict |
-| R19 | 前端未整合 temporal explainability | FE | 🟢 | 後端已就緒，前端待接入 |
+| ~~R19~~ | ~~前端 explainability UI~~ | FE | ✅ | 已完成：ExplainView + AlertList 按鈕 |
 
 ---
 
@@ -175,7 +175,7 @@ ENABLE_ATTACK_ENDPOINTS = os.getenv("ENABLE_ATTACK_ENDPOINTS", "false").lower() 
 ### 中優先（功能完善）
 
 ```
-[ ] R19: 前端整合 temporal explainability 視覺化
+[x] R19: 前端整合 explainability（ExplainView + Top-K + AlertList 按鈕）
 ```
 
 ### 低優先（長期改善）

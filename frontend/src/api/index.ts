@@ -109,6 +109,31 @@ export interface MemoryPoisoningResult {
   rows: MemoryPoisoningRow[]
 }
 
+export interface ExplainFeature {
+  name: string
+  importance: number
+  attribution?: number
+}
+
+export interface ExplainResult {
+  edge_idx: number
+  src_node?: number
+  dst_node?: number
+  src?: number
+  dst?: number
+  timestamp?: number
+  predicted_class: number
+  confidence: number
+  top_features: ExplainFeature[]
+  node_feature_importance?: { src: number[]; dst: number[] }
+  edge_self_importance?: number
+  feature_attribution?: number[]
+  edge_mask?: number[]
+  method?: string
+  rank?: number
+  window?: number
+}
+
 export const api = {
   upload(file: File): Promise<AxiosResponse<UploadResponse>> {
     const form = new FormData()
@@ -161,5 +186,17 @@ export const api = {
     poison_strategy: string
   }): Promise<AxiosResponse<MemoryPoisoningResult>> {
     return apiClient.post('/memory-poisoning', params)
+  },
+
+  explainFlow(
+    sessionId: string, model: string, edgeIdx: number, epochs = 200
+  ): Promise<AxiosResponse<ExplainResult>> {
+    return apiClient.post(`/explain/${sessionId}`, { model, edge_idx: edgeIdx, epochs })
+  },
+
+  explainTopAlerts(
+    sessionId: string, model: string, topK = 5, epochs = 200
+  ): Promise<AxiosResponse<ExplainResult[]>> {
+    return apiClient.post(`/explain-top/${sessionId}`, { model, top_k: topK, epochs })
   },
 }

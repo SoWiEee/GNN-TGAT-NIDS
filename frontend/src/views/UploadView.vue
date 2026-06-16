@@ -30,7 +30,8 @@
         <select v-model="selectedModel">
           <option value="gat">GAT (Graph Attention Network)</option>
           <option value="graphsage">GraphSAGE</option>
-          <option value="ensemble">Ensemble (GraphSAGE + GAT)</option>
+          <option value="egraphsage">E-GraphSAGE (Edge-Feature-Aware)</option>
+          <option value="ensemble">Ensemble (GraphSAGE + GAT + E-GraphSAGE)</option>
           <option value="tgat">TGAT (Temporal Graph Attention)</option>
           <option value="tgn">TGN (Temporal Graph Network)</option>
         </select>
@@ -95,6 +96,7 @@ function onFileChange(e: Event) {
 
 async function submit() {
   if (!selectedFile.value) return
+  session.selectedModel = selectedModel.value
   await session.uploadAndAnalyze(selectedFile.value, selectedModel.value)
 }
 

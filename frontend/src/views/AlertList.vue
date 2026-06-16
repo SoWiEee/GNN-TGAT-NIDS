@@ -32,8 +32,9 @@
             {{ f.name }}
           </span>
         </td>
-        <td>
-          <button class="btn-adv" @click="goAdversarial(alert.flow_id)">Adversarial →</button>
+        <td class="action-cell">
+          <button class="btn-explain" @click="goExplain(alert.flow_id)">Explain</button>
+          <button class="btn-adv" @click="goAdversarial(alert.flow_id)">Adversarial</button>
         </td>
       </tr>
       <tr v-if="!session.alerts.length">
@@ -70,6 +71,11 @@ async function loadAlerts(p: number) {
 function goAdversarial(flowId: string) {
   session.selectedFlowId = flowId
   router.push('/adversarial')
+}
+
+function goExplain(flowId: string) {
+  session.selectedFlowId = flowId
+  router.push('/explain')
 }
 
 onMounted(() => loadAlerts(1))
@@ -123,6 +129,17 @@ h2 { font-size: 18px; }
   margin-right: 4px;
   font-family: monospace;
 }
+.action-cell { display: flex; gap: 6px; }
+.btn-explain {
+  padding: 4px 10px;
+  background: #6d28d9;
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+.btn-explain:hover { background: #7c3aed; }
 .btn-adv {
   padding: 4px 10px;
   background: #1d4ed8;
