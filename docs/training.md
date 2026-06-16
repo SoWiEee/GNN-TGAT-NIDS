@@ -132,6 +132,15 @@ train:
   focal_gamma: 3.0  # default 2.0, increase for more rare-class focus
 ```
 
+### 4. LR Scheduler
+
+```yaml
+train:
+  scheduler: cosine  # "none" | "cosine" | "plateau"
+```
+
+Cosine annealing (`CosineAnnealingLR`) decays LR from `train.lr` to 1% of initial over the full training run. This prevents overshooting on rare-class gradients and was the single most impactful improvement for macro F1.
+
 ### Recommended Configuration
 
 ```bash
@@ -139,21 +148,44 @@ uv run python train.py model=graphsage \
     train.class_weight_strategy=sqrt_inverse \
     train.focal_gamma=3.0 \
     train.val_metric=macro_f1 \
-    train.patience=15
+    train.scheduler=cosine \
+    train.patience=20
 ```
 
-### Experiment Results (GraphSAGE)
+### Experiment Results
 
-| Config | Weighted F1 | Macro F1 | Shellcode F1 | Worms F1 |
-|--------|:-----------:|:--------:|:------------:|:--------:|
-| Baseline (`inverse`, γ=2.0, val=f1) | **0.9712** | 0.4657 | 0.466 | 0.116 |
-| `effective`, γ=2.0, val=macro_f1 | 0.0300 | — | — | — |
-| `sqrt_inverse`, γ=3.0, val=macro_f1 | 0.9681 | **0.4714** | **0.535** | **0.193** |
+| Model | Config | Weighted F1 | Macro F1 | Shellcode F1 | Worms F1 |
+|-------|--------|:-----------:|:--------:|:------------:|:--------:|
+| GraphSAGE | Baseline (`inverse`, γ=2.0, val=f1) | 0.9712 | 0.4657 | 0.466 | 0.116 |
+| GraphSAGE | `effective`, γ=2.0, val=macro_f1 | 0.0300 | — | — | — |
+| GraphSAGE | `sqrt_inverse`, γ=3.0, val=macro_f1 | 0.9681 | 0.4714 | 0.535 | 0.193 |
+| GraphSAGE | `sqrt_inverse`, γ=3.0, macro_f1, cosine | **0.9766** | **0.5389** | **0.746** | **0.227** |
+| E-GraphSAGE | Baseline (`inverse`, γ=2.0, val=f1) | 0.9708 | 0.4681 | 0.474 | 0.099 |
+| E-GraphSAGE | `sqrt_inverse`, γ=3.0, macro_f1, cosine | **0.9756** | **0.5499** | **0.708** | **0.343** |
+
+### Per-Class Improvement (Best Config vs Baseline)
+
+| Class | Support | Baseline F1 | Improved F1 | Δ |
+|-------|--------:|:-----------:|:-----------:|:---:|
+| Benign | 369,299 | 0.9935 | 0.9981 | +0.005 |
+| Analysis | 239 | 0.1458 | 0.2752 | **+0.129** |
+| Backdoor | 234 | 0.1180 | 0.2067 | **+0.089** |
+| DoS | 1,587 | 0.2020 | 0.2294 | +0.027 |
+| Exploits | 11,986 | 0.7760 | 0.7407 | -0.035 |
+| Fuzzers | 7,502 | 0.6978 | 0.7474 | **+0.050** |
+| Generic | 1,527 | 0.4076 | 0.4350 | +0.027 |
+| Recon | 4,330 | 0.7341 | 0.7839 | **+0.050** |
+| Shellcode | 576 | 0.4661 | 0.7460 | **+0.280** |
+| Worms | 69 | 0.1163 | 0.2269 | **+0.111** |
 
 **Key findings:**
 - `effective` weights are too aggressive for NF-UNSW-NB15-v2 — they reduce Benign weight to ~0.0003, collapsing overall detection
-- `sqrt_inverse` + higher gamma provides the best trade-off: +0.0057 macro F1, +0.069 Shellcode F1, +0.077 Worms F1, with only -0.003 weighted F1
-- Further improvements likely require oversampling, threshold calibration, or hierarchical classification
+- Cosine annealing LR was the single biggest contributor — it prevents the optimizer from overshooting on rare-class gradients in later epochs
+- The best config improves BOTH weighted F1 and macro F1 simultaneously — no trade-off
+- E-GraphSAGE benefits even more than GraphSAGE: +0.0818 macro F1 (vs +0.0732), likely because edge-feature-aware message passing provides richer representations for distinguishing attack subtypes
+- Edge-level oversampling (`oversample_factor=5`) hurt performance, likely due to duplicate gradient signal causing overfitting
+- Post-hoc threshold calibration (prior-adjusted prediction) had no effect — the model's argmax is already optimal given its learned representations
+- The confusion is primarily between attack subtypes (DoS↔Exploits, Generic↔DoS/Exploits, Analysis↔Backdoor), not benign vs attack
 
 ---
 

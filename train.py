@@ -60,6 +60,40 @@ def _compute_class_weights(
     return compute_class_weights(all_labels_t, n_classes, device=device, strategy=strategy)
 
 
+def _oversample_loss(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    criterion: torch.nn.Module,
+    oversample_factor: int,
+) -> torch.Tensor:
+    """Compute loss with edge-level oversampling for rare classes.
+
+    Duplicates minority-class edges in the loss so the model sees more
+    gradient signal from rare attack types each batch.
+    """
+    if oversample_factor <= 1:
+        return criterion(logits, labels)
+
+    counts = torch.bincount(labels, minlength=logits.shape[1]).float()
+    median_count = counts[counts > 0].median()
+
+    extra_logits, extra_labels = [], []
+    for cls in range(logits.shape[1]):
+        mask = labels == cls
+        n = mask.sum().item()
+        if 0 < n < median_count:
+            repeats = min(int(median_count / n), oversample_factor)
+            if repeats > 1:
+                extra_logits.append(logits[mask].repeat(repeats - 1, 1))
+                extra_labels.append(labels[mask].repeat(repeats - 1))
+
+    if extra_logits:
+        all_logits = torch.cat([logits] + extra_logits)
+        all_labels = torch.cat([labels] + extra_labels)
+        return criterion(all_logits, all_labels)
+    return criterion(logits, labels)
+
+
 def _train_epoch(
     model: torch.nn.Module,
     loader: DataLoader,
@@ -67,6 +101,7 @@ def _train_epoch(
     criterion: torch.nn.Module,
     device: torch.device,
     scaler: torch.amp.GradScaler | None,
+    oversample_factor: int = 1,
 ) -> float:
     """Run one training epoch; return mean loss."""
     model.train()
@@ -81,7 +116,9 @@ def _train_epoch(
         with torch.amp.autocast(device_type=device.type, enabled=use_amp,
                                 dtype=torch.bfloat16):
             logits = model(data)
-            loss = criterion(logits, data.y_multi)
+            loss = _oversample_loss(
+                logits, data.y_multi, criterion, oversample_factor,
+            )
 
         if use_amp:
             scaler.scale(loss).backward()
@@ -326,6 +363,20 @@ def main(cfg: DictConfig) -> None:
 
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.train.lr)
 
+    # LR scheduler
+    scheduler_type = cfg.train.get("scheduler", "none")
+    scheduler = None
+    if scheduler_type == "cosine":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=cfg.train.epochs, eta_min=cfg.train.lr * 0.01,
+        )
+        log.info("scheduler=CosineAnnealingLR(T_max=%d)", cfg.train.epochs)
+    elif scheduler_type == "plateau":
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="max", factor=0.5, patience=5,
+        )
+        log.info("scheduler=ReduceLROnPlateau(factor=0.5, patience=5)")
+
     # Loss function — class weights always applied; focal loss reduces recall gap
     cw_strategy = cfg.train.get("class_weight_strategy", "inverse")
     class_weights = (
@@ -350,7 +401,10 @@ def main(cfg: DictConfig) -> None:
     val_every = cfg.train.get("val_every", 1)
     patience = int(cfg.train.get("patience", 0))
     val_metric_key = cfg.train.get("val_metric", "f1")
+    oversample_factor = int(cfg.train.get("oversample_factor", 1))
     log.info("val_metric=%s (checkpoint selection)", val_metric_key)
+    if oversample_factor > 1:
+        log.info("edge-level oversampling factor=%d", oversample_factor)
 
     # ── Checkpoint resume ────────────────────────────────────────────────────
     ckpt_dir = Path(cfg.train.checkpoint_dir)
@@ -416,8 +470,15 @@ def main(cfg: DictConfig) -> None:
             )
         else:
             train_loss = _train_epoch(
-                model, train_loader, optimizer, criterion, device, scaler
+                model, train_loader, optimizer, criterion, device, scaler,
+                oversample_factor=oversample_factor,
             )
+
+        # Step LR scheduler
+        if scheduler is not None and not isinstance(
+            scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau
+        ):
+            scheduler.step()
 
         # Skip val evaluation on non-val epochs (log train loss only)
         if (epoch + 1) % val_every != 0 and epoch + 1 < epochs:
@@ -430,11 +491,18 @@ def main(cfg: DictConfig) -> None:
             if is_temporal
             else _evaluate(model, val_loader, criterion, device)
         )
+        current_lr = optimizer.param_groups[0]["lr"]
         log.info(
-            "epoch %d/%d | train_loss=%.4f | val_f1=%.4f | val_macro_f1=%.4f | val_loss=%.4f",
+            "epoch %d/%d | train_loss=%.4f | val_f1=%.4f | val_macro_f1=%.4f"
+            " | val_loss=%.4f | lr=%.6f",
             epoch + 1, epochs, train_loss,
-            val_metrics["f1"], val_metrics.get("macro_f1", 0.0), val_metrics["loss"],
+            val_metrics["f1"], val_metrics.get("macro_f1", 0.0),
+            val_metrics["loss"], current_lr,
         )
+
+        # Step ReduceLROnPlateau after validation
+        if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+            scheduler.step(val_metrics.get(val_metric_key, val_metrics["f1"]))
 
         save_checkpoint(model, optimizer, epoch + 1, str(resume_path))
 

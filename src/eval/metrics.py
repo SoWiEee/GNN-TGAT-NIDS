@@ -150,6 +150,53 @@ def compute_per_class_metrics(
     }
 
 
+def calibrate_thresholds(
+    y_true: np.ndarray,
+    y_proba: np.ndarray,
+    n_classes: int,
+    n_iter: int = 800,
+) -> np.ndarray:
+    """Find per-class logit biases that maximise macro F1 via Nelder-Mead.
+
+    Parameters
+    ----------
+    y_true : shape ``(N,)``
+    y_proba : shape ``(N, C)`` — softmax probabilities
+    n_classes : number of classes
+    n_iter : max optimiser iterations
+
+    Returns
+    -------
+    np.ndarray
+        Shape ``(C,)`` biases to add to log-probabilities before argmax.
+    """
+    from scipy.optimize import minimize
+
+    log_proba = np.log(np.clip(y_proba, 1e-12, None))
+
+    def _neg_macro_f1(biases: np.ndarray) -> float:
+        adjusted = log_proba + biases
+        preds = adjusted.argmax(axis=1)
+        return -float(f1_score(y_true, preds, average="macro", zero_division=0))
+
+    result = minimize(
+        _neg_macro_f1,
+        x0=np.zeros(n_classes),
+        method="Nelder-Mead",
+        options={"maxiter": n_iter, "xatol": 1e-4, "fatol": 1e-6},
+    )
+    return result.x
+
+
+def apply_calibrated_prediction(
+    y_proba: np.ndarray,
+    biases: np.ndarray,
+) -> np.ndarray:
+    """Apply calibrated biases to produce predictions."""
+    log_proba = np.log(np.clip(y_proba, 1e-12, None))
+    return (log_proba + biases).argmax(axis=1)
+
+
 def compute_class_weights(
     labels: torch.Tensor | np.ndarray,
     n_classes: int,

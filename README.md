@@ -121,23 +121,24 @@ Evaluated on NF-UNSW-NB15-v2 test split (~397K flows, 3312 windows).
 
 ### Macro F1 Improvement
 
-Using `sqrt_inverse` class weights + `focal_gamma=3.0` + `val_metric=macro_f1` checkpoint selection:
+Using `sqrt_inverse` class weights + `focal_gamma=3.0` + `val_metric=macro_f1` + cosine annealing LR:
 
-| Metric | Baseline | Improved | Δ |
-|--------|:--------:|:--------:|:-:|
-| Macro F1 | 0.4657 | **0.4714** | **+0.0057** |
-| Weighted F1 | 0.9712 | 0.9681 | -0.0031 |
-| Shellcode F1 | 0.466 | **0.535** | **+0.069** |
-| Worms F1 | 0.116 | **0.193** | **+0.077** |
+| Model | Baseline Macro F1 | Improved Macro F1 | Δ | Weighted F1 |
+|-------|:-----------------:|:-----------------:|:-:|:-----------:|
+| E-GraphSAGE | 0.4681 | **0.5499** | **+0.0818** | 0.9756 |
+| GraphSAGE | 0.4657 | **0.5389** | **+0.0732** | 0.9766 |
 
-Trade-off: slight weighted F1 drop for better rare-class detection. Configure via:
+Largest per-class gains (GraphSAGE): Shellcode **+0.280**, Analysis **+0.129**, Worms **+0.111**.
+
+Both macro F1 and weighted F1 improved — no trade-off. Configure via:
 
 ```bash
 uv run python train.py model=graphsage \
     train.class_weight_strategy=sqrt_inverse \
     train.focal_gamma=3.0 \
     train.val_metric=macro_f1 \
-    train.patience=15
+    train.scheduler=cosine \
+    train.patience=20
 ```
 
 ### Per-Class F1 (Ensemble)
