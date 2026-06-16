@@ -64,11 +64,227 @@
     "delta_f1_after_adv_training": null
   },
   "ensemble": {
-    "clean_f1": 0.967,
-    "clean_precision": 0.9783,
-    "clean_recall": 0.9604,
-    "clean_roc_auc": 0.9988,
-    "clean_macro_f1": 0.4178,
+    "clean_f1": 0.97,
+    "clean_precision": 0.9794,
+    "clean_recall": 0.965,
+    "clean_roc_auc": 0.9992,
+    "clean_macro_f1": 0.451,
+    "per_class": [
+      {
+        "class_id": 0,
+        "name": "Benign",
+        "precision": 1.0,
+        "recall": 0.9865,
+        "f1": 0.9932,
+        "support": 369299
+      },
+      {
+        "class_id": 1,
+        "name": "Analysis",
+        "precision": 0.083,
+        "recall": 0.6109,
+        "f1": 0.1461,
+        "support": 239
+      },
+      {
+        "class_id": 2,
+        "name": "Backdoor",
+        "precision": 0.0977,
+        "recall": 0.4701,
+        "f1": 0.1618,
+        "support": 234
+      },
+      {
+        "class_id": 3,
+        "name": "DoS",
+        "precision": 0.1725,
+        "recall": 0.2565,
+        "f1": 0.2062,
+        "support": 1587
+      },
+      {
+        "class_id": 4,
+        "name": "Exploits",
+        "precision": 0.9048,
+        "recall": 0.6357,
+        "f1": 0.7467,
+        "support": 11986
+      },
+      {
+        "class_id": 5,
+        "name": "Fuzzers",
+        "precision": 0.6765,
+        "recall": 0.7854,
+        "f1": 0.7269,
+        "support": 7502
+      },
+      {
+        "class_id": 6,
+        "name": "Generic",
+        "precision": 0.6074,
+        "recall": 0.2056,
+        "f1": 0.3072,
+        "support": 1527
+      },
+      {
+        "class_id": 7,
+        "name": "Reconnaissance",
+        "precision": 0.5856,
+        "recall": 0.9309,
+        "f1": 0.719,
+        "support": 4330
+      },
+      {
+        "class_id": 8,
+        "name": "Shellcode",
+        "precision": 0.2688,
+        "recall": 0.9288,
+        "f1": 0.417,
+        "support": 576
+      },
+      {
+        "class_id": 9,
+        "name": "Worms",
+        "precision": 0.0452,
+        "recall": 0.8261,
+        "f1": 0.0858,
+        "support": 69
+      }
+    ],
+    "confusion_matrix": [
+      [
+        364323,
+        749,
+        216,
+        305,
+        54,
+        1523,
+        9,
+        962,
+        1085,
+        73
+      ],
+      [
+        0,
+        146,
+        77,
+        15,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        8,
+        110,
+        8,
+        13,
+        26,
+        5,
+        17,
+        42,
+        5
+      ],
+      [
+        0,
+        238,
+        123,
+        407,
+        382,
+        192,
+        27,
+        102,
+        34,
+        82
+      ],
+      [
+        0,
+        540,
+        137,
+        1095,
+        7619,
+        817,
+        140,
+        757,
+        193,
+        688
+      ],
+      [
+        0,
+        27,
+        255,
+        203,
+        20,
+        5892,
+        13,
+        926,
+        13,
+        153
+      ],
+      [
+        0,
+        35,
+        107,
+        303,
+        262,
+        185,
+        314,
+        67,
+        85,
+        169
+      ],
+      [
+        0,
+        16,
+        95,
+        17,
+        71,
+        60,
+        9,
+        4031,
+        0,
+        31
+      ],
+      [
+        0,
+        0,
+        6,
+        7,
+        0,
+        8,
+        0,
+        18,
+        535,
+        2
+      ],
+      [
+        0,
+        1,
+        0,
+        0,
+        0,
+        5,
+        0,
+        3,
+        3,
+        57
+      ]
+    ],
+    "class_names": [
+      "Benign",
+      "Analysis",
+      "Backdoor",
+      "DoS",
+      "Exploits",
+      "Fuzzers",
+      "Generic",
+      "Reconnaissance",
+      "Shellcode",
+      "Worms"
+    ],
     "dr_under_cpgd_eps01": null,
     "dr_under_cpgd_eps01_sampled": null,
     "cpgd_epsilon": null,
@@ -78,5 +294,474 @@
     "cpgd_scope": "not_applicable",
     "cpgd_constraint": "ensemble_clean_only",
     "delta_f1_after_adv_training": null
+  },
+  "egraphsage": {
+    "clean_f1": 0.9708,
+    "clean_precision": 0.9784,
+    "clean_recall": 0.9665,
+    "clean_roc_auc": 0.9991,
+    "clean_macro_f1": 0.4681,
+    "per_class": [
+      {
+        "class_id": 0,
+        "name": "Benign",
+        "precision": 1.0,
+        "recall": 0.9866,
+        "f1": 0.9933,
+        "support": 369299
+      },
+      {
+        "class_id": 1,
+        "name": "Analysis",
+        "precision": 0.0952,
+        "recall": 0.5188,
+        "f1": 0.1609,
+        "support": 239
+      },
+      {
+        "class_id": 2,
+        "name": "Backdoor",
+        "precision": 0.125,
+        "recall": 0.4744,
+        "f1": 0.1979,
+        "support": 234
+      },
+      {
+        "class_id": 3,
+        "name": "DoS",
+        "precision": 0.1643,
+        "recall": 0.2949,
+        "f1": 0.211,
+        "support": 1587
+      },
+      {
+        "class_id": 4,
+        "name": "Exploits",
+        "precision": 0.8747,
+        "recall": 0.6516,
+        "f1": 0.7468,
+        "support": 11986
+      },
+      {
+        "class_id": 5,
+        "name": "Fuzzers",
+        "precision": 0.6785,
+        "recall": 0.85,
+        "f1": 0.7547,
+        "support": 7502
+      },
+      {
+        "class_id": 6,
+        "name": "Generic",
+        "precision": 0.4768,
+        "recall": 0.2351,
+        "f1": 0.3149,
+        "support": 1527
+      },
+      {
+        "class_id": 7,
+        "name": "Reconnaissance",
+        "precision": 0.618,
+        "recall": 0.8894,
+        "f1": 0.7293,
+        "support": 4330
+      },
+      {
+        "class_id": 8,
+        "name": "Shellcode",
+        "precision": 0.3199,
+        "recall": 0.9115,
+        "f1": 0.4736,
+        "support": 576
+      },
+      {
+        "class_id": 9,
+        "name": "Worms",
+        "precision": 0.0529,
+        "recall": 0.7681,
+        "f1": 0.099,
+        "support": 69
+      }
+    ],
+    "confusion_matrix": [
+      [
+        364356,
+        469,
+        160,
+        588,
+        316,
+        1614,
+        71,
+        887,
+        774,
+        64
+      ],
+      [
+        0,
+        124,
+        73,
+        41,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        13,
+        111,
+        14,
+        11,
+        25,
+        5,
+        15,
+        37,
+        3
+      ],
+      [
+        0,
+        198,
+        108,
+        468,
+        411,
+        161,
+        46,
+        94,
+        38,
+        63
+      ],
+      [
+        0,
+        405,
+        141,
+        1196,
+        7810,
+        747,
+        221,
+        784,
+        159,
+        523
+      ],
+      [
+        0,
+        38,
+        103,
+        235,
+        40,
+        6377,
+        42,
+        513,
+        8,
+        146
+      ],
+      [
+        0,
+        35,
+        97,
+        275,
+        281,
+        201,
+        359,
+        65,
+        97,
+        117
+      ],
+      [
+        0,
+        18,
+        88,
+        21,
+        55,
+        257,
+        9,
+        3851,
+        0,
+        31
+      ],
+      [
+        0,
+        1,
+        7,
+        9,
+        2,
+        13,
+        0,
+        17,
+        525,
+        2
+      ],
+      [
+        0,
+        1,
+        0,
+        2,
+        2,
+        3,
+        0,
+        5,
+        3,
+        53
+      ]
+    ],
+    "class_names": [
+      "Benign",
+      "Analysis",
+      "Backdoor",
+      "DoS",
+      "Exploits",
+      "Fuzzers",
+      "Generic",
+      "Reconnaissance",
+      "Shellcode",
+      "Worms"
+    ],
+    "dr_under_cpgd_eps01": 1.0,
+    "dr_under_cpgd_eps01_sampled": false,
+    "cpgd_epsilon": 0.1,
+    "cpgd_steps": 40,
+    "cpgd_sample_windows": 3312,
+    "cpgd_attack_edges": 32993,
+    "cpgd_scope": "full_test",
+    "cpgd_constraint": "raw_constraint_set",
+    "delta_f1_after_adv_training": null
+  },
+  "ensemble_weighted": {
+    "clean_f1": 0.97,
+    "clean_precision": 0.9794,
+    "clean_recall": 0.965,
+    "clean_roc_auc": 0.9992,
+    "clean_macro_f1": 0.4517,
+    "per_class": [
+      {
+        "class_id": 0,
+        "name": "Benign",
+        "precision": 1.0,
+        "recall": 0.9866,
+        "f1": 0.9932,
+        "support": 369299
+      },
+      {
+        "class_id": 1,
+        "name": "Analysis",
+        "precision": 0.0832,
+        "recall": 0.6109,
+        "f1": 0.1465,
+        "support": 239
+      },
+      {
+        "class_id": 2,
+        "name": "Backdoor",
+        "precision": 0.0991,
+        "recall": 0.4744,
+        "f1": 0.164,
+        "support": 234
+      },
+      {
+        "class_id": 3,
+        "name": "DoS",
+        "precision": 0.1715,
+        "recall": 0.2558,
+        "f1": 0.2053,
+        "support": 1587
+      },
+      {
+        "class_id": 4,
+        "name": "Exploits",
+        "precision": 0.9046,
+        "recall": 0.6358,
+        "f1": 0.7468,
+        "support": 11986
+      },
+      {
+        "class_id": 5,
+        "name": "Fuzzers",
+        "precision": 0.6766,
+        "recall": 0.7862,
+        "f1": 0.7273,
+        "support": 7502
+      },
+      {
+        "class_id": 6,
+        "name": "Generic",
+        "precision": 0.6081,
+        "recall": 0.2063,
+        "f1": 0.3081,
+        "support": 1527
+      },
+      {
+        "class_id": 7,
+        "name": "Reconnaissance",
+        "precision": 0.5864,
+        "recall": 0.9309,
+        "f1": 0.7196,
+        "support": 4330
+      },
+      {
+        "class_id": 8,
+        "name": "Shellcode",
+        "precision": 0.2701,
+        "recall": 0.9288,
+        "f1": 0.4185,
+        "support": 576
+      },
+      {
+        "class_id": 9,
+        "name": "Worms",
+        "precision": 0.0461,
+        "recall": 0.8406,
+        "f1": 0.0874,
+        "support": 69
+      }
+    ],
+    "confusion_matrix": [
+      [
+        364334,
+        746,
+        212,
+        308,
+        54,
+        1525,
+        9,
+        960,
+        1078,
+        73
+      ],
+      [
+        0,
+        146,
+        77,
+        15,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        8,
+        111,
+        8,
+        13,
+        26,
+        5,
+        17,
+        41,
+        5
+      ],
+      [
+        0,
+        238,
+        123,
+        406,
+        383,
+        192,
+        27,
+        102,
+        34,
+        82
+      ],
+      [
+        0,
+        537,
+        137,
+        1099,
+        7621,
+        818,
+        140,
+        756,
+        193,
+        685
+      ],
+      [
+        0,
+        27,
+        253,
+        204,
+        20,
+        5898,
+        13,
+        921,
+        13,
+        153
+      ],
+      [
+        0,
+        35,
+        106,
+        304,
+        262,
+        184,
+        315,
+        67,
+        85,
+        169
+      ],
+      [
+        0,
+        16,
+        95,
+        17,
+        72,
+        59,
+        9,
+        4031,
+        0,
+        31
+      ],
+      [
+        0,
+        0,
+        6,
+        7,
+        0,
+        9,
+        0,
+        17,
+        535,
+        2
+      ],
+      [
+        0,
+        1,
+        0,
+        0,
+        0,
+        5,
+        0,
+        3,
+        2,
+        58
+      ]
+    ],
+    "class_names": [
+      "Benign",
+      "Analysis",
+      "Backdoor",
+      "DoS",
+      "Exploits",
+      "Fuzzers",
+      "Generic",
+      "Reconnaissance",
+      "Shellcode",
+      "Worms"
+    ],
+    "dr_under_cpgd_eps01": null,
+    "dr_under_cpgd_eps01_sampled": null,
+    "cpgd_epsilon": null,
+    "cpgd_steps": null,
+    "cpgd_sample_windows": null,
+    "cpgd_attack_edges": null,
+    "cpgd_scope": "not_applicable",
+    "cpgd_constraint": "ensemble_weighted_by_val_f1",
+    "delta_f1_after_adv_training": null,
+    "ensemble_weights": {
+      "graphsage": 0.33520003894585215,
+      "gat": 0.3298222652764945,
+      "egraphsage": 0.3349776957776533
+    }
   }
 }

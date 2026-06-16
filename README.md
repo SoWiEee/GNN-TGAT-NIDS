@@ -35,7 +35,7 @@ flowchart LR
 
     subgraph Backend["Backend — FastAPI"]
         SB["Static Graph Builder\n300 s tumbling windows"]
-        GNN["GNN Inference\nGraphSAGE / GAT / TGAT / TGN"]
+        GNN["GNN Inference\nGraphSAGE / GAT / E-GraphSAGE\nTGAT / TGN"]
         ADV["Adversarial Module\nC-PGD / Edge Injection / GAN"]
         RPT["Report Generator\nJinja2 → PDF / HTML"]
     end
@@ -95,6 +95,7 @@ uv run python src/data/static_builder.py
 # Static models
 uv run python train.py model=graphsage
 uv run python train.py model=gat
+uv run python train.py model=egraphsage
 
 # Temporal models (requires temporal data built first)
 uv run python src/data/temporal_builder.py
@@ -183,6 +184,7 @@ uv sync --group dev
 # Search static models
 uv run python scripts/tune_hyperparams.py --model graphsage --trials 50
 uv run python scripts/tune_hyperparams.py --model gat --trials 50
+uv run python scripts/tune_hyperparams.py --model egraphsage --trials 50
 
 # Search temporal models
 uv run python scripts/tune_hyperparams.py --model tgat --trials 30
@@ -329,6 +331,7 @@ GNN-NIDS-Analyzer/
 │   │   ├── base.py             ← BaseNIDSModel ABC
 │   │   ├── graphsage.py        ← 3-layer GraphSAGE edge classifier
 │   │   ├── gat.py              ← 4-head GAT with attention export
+│   │   ├── egraphsage.py       ← E-GraphSAGE (edge-feature-aware message passing)
 │   │   ├── tgat.py             ← Temporal Graph Attention Network
 │   │   ├── tgn.py              ← Temporal Graph Network (GRU memory)
 │   │   └── ensemble.py         ← Multi-model ensemble (soft/hard/weighted vote)
@@ -376,6 +379,9 @@ GNN-NIDS-Analyzer/
 ├── scripts/
 │   ├── create_demo_dataset.py      ← merge UNSW-NB15 CSVs, create demo sample
 │   ├── compute_reliability_metrics.py ← clean F1 + C-PGD DR → reliability.json
+│   ├── multi_seed_eval.py          ← multi-seed training for statistical significance
+│   ├── cross_dataset_validation.py ← cross-dataset generalization evaluation
+│   ├── window_size_eval.py         ← time-window size sensitivity analysis
 │   ├── tune_hyperparams.py         ← Optuna Bayesian hyperparameter search
 │   ├── export_onnx.py              ← ONNX export + optional quantization
 │   └── pcap_to_netflow.py          ← PCAP → NetFlow CSV (nfstream)
@@ -389,6 +395,7 @@ GNN-NIDS-Analyzer/
 ├── checkpoints/                ← pre-trained model weights (git-ignored)
 │   ├── graphsage_best.pt
 │   ├── gat_best.pt
+│   ├── egraphsage_best.pt
 │   ├── tgat_best.pt
 │   └── tgn_best.pt
 ├── tests/
@@ -426,15 +433,16 @@ GNN-NIDS-Analyzer/
 
 ## Model Reliability (Pre-computed on NF-UNSW-NB15-v2 test split)
 
-| Metric | GraphSAGE | GAT | TGAT | TGN | Ensemble |
-|--------|:---------:|:---:|:----:|:---:|:---:|
-| Weighted F1 (clean) | **0.9712** | **0.9534** | **0.9475** | **0.9463** | **0.9670** |
-| Precision / Recall | 0.9792 / 0.9660 | 0.9729 / 0.9433 | 0.9632 / 0.9391 | 0.9610 / 0.9351 | 0.9783 / 0.9604 |
-| ROC-AUC | 0.9992 | 0.9963 | 0.9963 | 0.9960 | 0.9988 |
-| DR@attack — C-PGD ε=0.1, 40 steps | 1.0000 | 1.0000 | 1.0000* | 0.9989* | — |
-| ΔF1 after adversarial training | +0.0041 | +0.0087 | — | — | — |
+| Metric | GraphSAGE | GAT | E-GraphSAGE | TGAT | TGN | Ensemble (3-model) |
+|--------|:---------:|:---:|:-----------:|:----:|:---:|:------------------:|
+| Weighted F1 (clean) | **0.9712** | **0.9534** | **0.9708** | **0.9475** | **0.9463** | **0.9700** |
+| Macro F1 | 0.4657 | 0.3164 | 0.4681 | 0.3643 | 0.3438 | 0.4510 |
+| Precision / Recall | 0.9792 / 0.9660 | 0.9729 / 0.9433 | 0.9784 / 0.9665 | 0.9632 / 0.9391 | 0.9610 / 0.9351 | 0.9794 / 0.9650 |
+| ROC-AUC | 0.9992 | 0.9963 | 0.9991 | 0.9963 | 0.9960 | 0.9992 |
+| DR@attack — C-PGD ε=0.1, 40 steps | 1.0000 | 1.0000 | 1.0000 | 1.0000* | 0.9989* | — |
+| ΔF1 after adversarial training | +0.0041 | +0.0087 | — | — | — | — |
 
-*Trained on NF-UNSW-NB15-v2 (~2M flows). Static C-PGD DR is a full 3312-window test sweep. `*` Temporal C-PGD DR is a bounded constrained run with 256 warm-up batches and 32 attacked test batches.*
+*Trained on NF-UNSW-NB15-v2 (~2M flows). Static C-PGD DR is a full 3312-window test sweep. `*` Temporal C-PGD DR is a bounded constrained run with 256 warm-up batches and 32 attacked test batches. Ensemble uses soft-vote over GraphSAGE + GAT + E-GraphSAGE with learned validation-based weights.*
 
 ---
 
@@ -443,7 +451,7 @@ GNN-NIDS-Analyzer/
 | Layer | Technology |
 |-------|-----------|
 | ML framework | PyTorch 2.4 + PyTorch Geometric 2.6 |
-| GNN models | GraphSAGE, GAT, TGAT, TGN |
+| GNN models | GraphSAGE, GAT, E-GraphSAGE, TGAT, TGN |
 | Backend | FastAPI + uvicorn |
 | Frontend | Vue 3 + Vite + TypeScript |
 | Graph visualization | Cytoscape.js |
@@ -466,9 +474,9 @@ GNN-NIDS-Analyzer/
 - **Learning rate scheduler** — Add cosine annealing or ReduceLROnPlateau to reduce late-training val_loss oscillation
 - **Cross-dataset feature alignment** — Reuse the source feature schema/scaler or add adapters for datasets whose feature set differs from the current 42-feature checkpoints
 - **Full temporal adversarial sweep** — Run constrained temporal C-PGD over the complete temporal test split when sufficient compute is available
-- **Per-class reporting** — Add confusion matrices and per-class recall for minority attack classes
+- **E-GraphSAGE adversarial training** — Evaluate robustness improvement with adversarial training on E-GraphSAGE
+- **Lightweight temporal models** — Evaluate GraphMixer / SimpleDyG as efficient alternatives to TGAT/TGN
 - **Frontend enhancements** — Real-time attack timeline updates, model comparison dashboard, user-defined alert rules
-- **Ensemble weighting** — Learn validation-based ensemble weights instead of unweighted soft voting
 
 ---
 
