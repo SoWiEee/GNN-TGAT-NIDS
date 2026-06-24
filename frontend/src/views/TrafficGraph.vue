@@ -21,13 +21,14 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import type cytoscape from 'cytoscape'
 import { useSessionStore } from '@/stores/session'
 
 const session = useSessionStore()
 const cyContainer = ref<HTMLElement | null>(null)
 const selectedNode = ref<{ data: { id: string; ip: string; riskScore: number } } | null>(null)
 
-let cy: ReturnType<typeof import('cytoscape')['default']> | null = null
+let cy: import('cytoscape').Core | null = null
 
 const incidentAlerts = computed(() =>
   session.alerts.filter(
@@ -74,10 +75,10 @@ async function initCytoscape() {
     ],
   })
 
-  cy.on('tap', 'node', (e) => {
+  cy.on('tap', 'node', (e: cytoscape.EventObject) => {
     selectedNode.value = { data: e.target.data() }
   })
-  cy.on('tap', (e) => {
+  cy.on('tap', (e: cytoscape.EventObject) => {
     if (e.target === cy) selectedNode.value = null
   })
 }

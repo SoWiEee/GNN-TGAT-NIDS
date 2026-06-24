@@ -32,7 +32,7 @@
 
   <div v-else class="results">
     <div
-      v-for="(result, idx) in session.explainResults"
+      v-for="result in session.explainResults"
       :key="result.edge_idx"
       class="explain-card"
     >

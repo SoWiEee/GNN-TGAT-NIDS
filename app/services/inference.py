@@ -109,6 +109,7 @@ def _sync_inference(csv_path: str, model_name: str) -> dict[str, Any]:
             output_dir=tmpdir,
             window_size_s=60.0,
             ratios=(1.0, 0.0, 0.0),
+            label_col="attack_cat",
         )
         dataset = StaticNIDSDataset(root=tmpdir, split="train")
 
@@ -134,15 +135,13 @@ def _sync_inference_temporal(
     from src.data.static_builder import build_static_graphs
     from src.data.static_dataset import StaticNIDSDataset
 
-    # Temporal models still need static graph structure for visualisation.
-    # Build static graphs and run inference through them — the temporal model
-    # processes each window's edges using its temporal attention.
     with tempfile.TemporaryDirectory() as tmpdir:
         meta = build_static_graphs(
             csv_path=csv_path,
             output_dir=tmpdir,
             window_size_s=60.0,
             ratios=(1.0, 0.0, 0.0),
+            label_col="attack_cat",
         )
         dataset = StaticNIDSDataset(root=tmpdir, split="train")
 
@@ -178,6 +177,7 @@ def _sync_inference_ensemble(csv_path: str) -> dict[str, Any]:
             output_dir=tmpdir,
             window_size_s=60.0,
             ratios=(1.0, 0.0, 0.0),
+            label_col="attack_cat",
         )
         dataset = StaticNIDSDataset(root=tmpdir, split="train")
 

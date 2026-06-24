@@ -4,10 +4,11 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir uv
 
-COPY pyproject.toml uv.lock* ./
-RUN uv sync --no-dev --no-install-project
+COPY pyproject.toml uv.lock* LICENSE README.md ./
+RUN uv python install 3.12
+RUN uv sync --no-dev --no-install-project --python 3.12
 
-RUN uv run pip install --no-cache-dir \
+RUN uv pip install --no-cache-dir \
     pyg_lib torch_scatter torch_sparse torch_cluster \
     -f https://data.pyg.org/whl/torch-2.6.0+cu124.html
 

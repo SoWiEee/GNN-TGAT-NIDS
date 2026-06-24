@@ -226,11 +226,9 @@ uv run python train.py model=graphsage \
 
 ## Future Work
 
-- **Learning rate scheduler** — Cosine annealing or ReduceLROnPlateau
-- **Cross-dataset feature alignment** — Adapters for datasets with different feature schemas
-- **E-GraphSAGE adversarial training** — Edge-feature-aware adversarial robustness
-- **Lightweight temporal models** — GraphMixer / SimpleDyG as alternatives to TGAT/TGN
-- **Macro F1 improvement** — Oversampling or threshold calibration for rare attack classes
+- **Cross-dataset feature alignment** — Adapters for datasets with different feature schemas (e.g. CIC-IDS-2017, ToN-IoT)
+- **E-GraphSAGE / temporal adversarial training** — Edge-feature-aware and temporal adversarial robustness (framework ready, not yet trained)
+- **Lightweight temporal models** — GraphMixer / SimpleDyG as faster alternatives to TGAT/TGN
 
 ---
 

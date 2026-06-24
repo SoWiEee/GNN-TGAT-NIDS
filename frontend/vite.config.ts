@@ -12,10 +12,10 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        manualChunks: {
-          'vendor-cytoscape': ['cytoscape'],
-          'vendor-plotly': ['plotly.js-basic-dist-min'],
-          'vendor-vue': ['vue', 'pinia', 'vue-router'],
+        manualChunks(id: string) {
+          if (id.includes('node_modules/cytoscape')) return 'vendor-cytoscape'
+          if (id.includes('node_modules/plotly')) return 'vendor-plotly'
+          if (id.includes('node_modules/vue') || id.includes('node_modules/pinia') || id.includes('node_modules/vue-router')) return 'vendor-vue'
         },
       },
     },

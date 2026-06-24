@@ -114,6 +114,7 @@ class StreamingSession:
                     output_dir=tmpdir,
                     window_size_s=self.window_seconds,
                     ratios=(1.0, 0.0, 0.0),
+                    label_col="attack_cat",
                 )
                 dataset = StaticNIDSDataset(root=tmpdir, split="train")
 

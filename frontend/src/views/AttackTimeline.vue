@@ -34,8 +34,8 @@ async function renderPlot() {
     paper_bgcolor: '#0f172a',
     plot_bgcolor: '#0f172a',
     font: { color: '#f1f5f9', size: 12 },
-    xaxis: { title: 'Time Window (60 s)', gridcolor: '#334155', zerolinecolor: '#334155' },
-    yaxis: { title: 'Flow Count', gridcolor: '#334155', zerolinecolor: '#334155' },
+    xaxis: { title: { text: 'Time Window (60 s)' }, gridcolor: '#334155', zerolinecolor: '#334155' },
+    yaxis: { title: { text: 'Flow Count' }, gridcolor: '#334155', zerolinecolor: '#334155' },
     legend: { bgcolor: '#1e293b', bordercolor: '#334155', borderwidth: 1 },
     margin: { t: 20, r: 20, b: 60, l: 60 },
   })

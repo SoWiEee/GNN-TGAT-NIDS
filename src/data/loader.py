@@ -12,7 +12,7 @@ import pandas as pd
 _TIMESTAMP_CANDIDATES = ["FIRST_SEEN", "Timestamp", "timestamp", "first_seen", "ts"]
 
 # Label column name candidates
-_LABEL_CANDIDATES = ["Label", "label", "Attack", "attack", "class", "Class"]
+_LABEL_CANDIDATES = ["Label", "label", "Attack", "attack", "attack_cat", "class", "Class"]
 
 
 def load_csv(
@@ -79,6 +79,8 @@ def load_csv(
         )
 
     df["_label"] = df[lbl_col].astype(str).str.strip()
+    if lbl_col != "_label":
+        df.drop(columns=[lbl_col], inplace=True)
 
     return df
 

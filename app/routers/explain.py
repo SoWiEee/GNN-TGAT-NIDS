@@ -48,6 +48,7 @@ def _load_session_data(session_id: UUID):
             output_dir=tmpdir,
             window_size_s=60.0,
             ratios=(1.0, 0.0, 0.0),
+            label_col="attack_cat",
         )
         dataset = StaticNIDSDataset(root=tmpdir, split="train")
         all_data = [data for data in dataset]
