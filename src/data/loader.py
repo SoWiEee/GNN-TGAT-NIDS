@@ -211,6 +211,7 @@ def get_feature_columns(df: pd.DataFrame, exclude: list[str] | None = None) -> l
         Sorted list of numeric feature column names.
     """
     always_exclude = {"_ts", "_label", "_encoded"}
+    always_exclude.update(_LABEL_CANDIDATES)
     if exclude:
         always_exclude.update(exclude)
 
