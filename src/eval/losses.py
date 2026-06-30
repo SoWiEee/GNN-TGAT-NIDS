@@ -43,6 +43,8 @@ class FocalLoss(nn.Module):
         pt = torch.exp(-ce)
         focal = (1.0 - pt) ** self.gamma * ce
 
+        if self.reduction == "none":
+            return focal
         if self.reduction == "mean":
             return focal.mean()
         return focal.sum()

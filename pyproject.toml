@@ -36,6 +36,8 @@ dependencies = [
     # uv pip install torch_scatter torch_sparse torch_cluster \
     #   --find-links https://data.pyg.org/whl/torch-2.6.0+cu124.html
     "pyarrow>=24.0.0",
+    "onnx>=1.22.0",
+    "onnxruntime>=1.27.0",
 ]
 
 [dependency-groups]

@@ -121,30 +121,56 @@ def _get_endpoint_keys(df: pd.DataFrame) -> tuple[list[tuple], list[tuple]]:
         return src_keys, dst_keys
 
     # ── Proxy mode (no IP columns) ───────────────────────────────────────────
+    # Strategy 1: TTL-binned proxies (UNSW-NB15 raw format with sttl/dttl)
     sttl_col = _get_col(df, ["sttl"])
     dttl_col = _get_col(df, ["dttl"])
-    proto_col = _get_col(df, ["proto"])
-    service_col = _get_col(df, ["service"])
 
-    sttl_bin = (
-        (df[sttl_col].fillna(0).astype(float) // 16).astype(int).tolist()
-        if sttl_col else [0] * len(df)
-    )
-    dttl_bin = (
-        (df[dttl_col].fillna(0).astype(float) // 16).astype(int).tolist()
-        if dttl_col else [0] * len(df)
+    if sttl_col is not None or dttl_col is not None:
+        proto_col = _get_col(df, ["proto"])
+        service_col = _get_col(df, ["service"])
+        sttl_bin = (
+            (df[sttl_col].fillna(0).astype(float) // 16).astype(int).tolist()
+            if sttl_col else [0] * len(df)
+        )
+        dttl_bin = (
+            (df[dttl_col].fillna(0).astype(float) // 16).astype(int).tolist()
+            if dttl_col else [0] * len(df)
+        )
+        proto_vals = (
+            df[proto_col].fillna("unk").astype(str).str.lower().str[:4].tolist()
+            if proto_col else ["unk"] * len(df)
+        )
+        service_vals = (
+            df[service_col].fillna("unk").astype(str).str.lower().str[:8].tolist()
+            if service_col else ["unk"] * len(df)
+        )
+        src_keys = [("src", t, p) for t, p in zip(sttl_bin, proto_vals)]
+        dst_keys = [("dst", t, s) for t, s in zip(dttl_bin, service_vals)]
+        return src_keys, dst_keys
+
+    # Strategy 2: port/protocol proxies (NF-format without IPs, e.g.
+    # NF-UNSW-NB15-v2). Destination nodes are keyed by (dst_port, proto)
+    # which identifies network services; source nodes by (l7_proto, proto)
+    # since ephemeral src ports would create too many sparse nodes.
+    dst_port_col = _get_col(df, ["L4_DST_PORT", "dst_port", "Dst Port"])
+    proto_col = _get_col(df, ["PROTOCOL", "proto", "Protocol"])
+    l7_col = _get_col(df, ["L7_PROTO", "l7_proto"])
+
+    dst_port_vals = (
+        df[dst_port_col].fillna(0).astype(int).tolist()
+        if dst_port_col else [0] * len(df)
     )
     proto_vals = (
-        df[proto_col].fillna("unk").astype(str).str.lower().str[:4].tolist()
-        if proto_col else ["unk"] * len(df)
+        df[proto_col].fillna(0).astype(int).tolist()
+        if proto_col else [0] * len(df)
     )
-    service_vals = (
-        df[service_col].fillna("unk").astype(str).str.lower().str[:8].tolist()
-        if service_col else ["unk"] * len(df)
+    l7_vals = (
+        df[l7_col].fillna(0).astype(int).tolist()
+        if l7_col else [0] * len(df)
     )
 
-    src_keys = [("src", t, p) for t, p in zip(sttl_bin, proto_vals)]
-    dst_keys = [("dst", t, s) for t, s in zip(dttl_bin, service_vals)]
+    src_keys = [("src", l7, p) for l7, p in zip(l7_vals, proto_vals)]
+    dst_keys = [("dst", dp, p) for dp, p in zip(dst_port_vals, proto_vals)]
     return src_keys, dst_keys
 
 

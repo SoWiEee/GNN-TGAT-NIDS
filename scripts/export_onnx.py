@@ -69,13 +69,20 @@ def export_model(model_name: str, output_path: Path, quantize: bool = False) -> 
     with open(meta_path) as f:
         meta = json.load(f)
 
-    n_features = meta["n_features"]
+    n_edge_features = meta["n_features"]
+
+    sample_path = STATIC_DIR / "test" / "00000.pt"
+    if sample_path.exists():
+        sample = torch.load(sample_path, map_location="cpu", weights_only=False)
+        n_node_features = sample.x.shape[1]
+    else:
+        n_node_features = n_edge_features
 
     num_nodes = 10
     num_edges = 20
-    dummy_x = torch.randn(num_nodes, n_features)
+    dummy_x = torch.randn(num_nodes, n_node_features)
     dummy_edge_index = torch.randint(0, num_nodes, (2, num_edges))
-    dummy_edge_attr = torch.randn(num_edges, n_features)
+    dummy_edge_attr = torch.randn(num_edges, n_edge_features)
 
     wrapper = StaticModelWrapper(model)
     wrapper.eval()

@@ -52,7 +52,11 @@ TEMPORAL_MODELS = {"tgat", "tgn"}
 def _suggest(trial: optuna.Trial, model_name: str) -> dict:
     params: dict = {
         "lr": trial.suggest_float("lr", 1e-4, 1e-2, log=True),
-        "focal_gamma": trial.suggest_float("focal_gamma", 1.0, 3.0, step=0.5),
+        "focal_gamma": trial.suggest_float("focal_gamma", 0.5, 3.0, step=0.5),
+        "oversample_factor": trial.suggest_int("oversample_factor", 1, 20),
+        "weight_strategy": trial.suggest_categorical(
+            "weight_strategy", ["inverse", "sqrt_inverse", "effective"],
+        ),
     }
 
     if model_name in STATIC_MODELS:
@@ -128,6 +132,25 @@ def _build_model(model_name: str, params: dict, **kwargs):
 
 # ── Objective (static) ──────────────────────────────────────────────────────
 
+def _oversample_edges(logits, labels, criterion, factor):
+    """Replicate rare-class edges in the loss computation."""
+    loss = criterion(logits, labels)
+    if loss.dim() == 0:
+        return loss
+    if factor <= 1:
+        return loss.mean()
+    counts = torch.bincount(labels, minlength=logits.shape[1]).float()
+    median_count = counts[counts > 0].median()
+    weights_per_sample = torch.ones(len(labels), device=labels.device)
+    for cls_id in range(logits.shape[1]):
+        mask = labels == cls_id
+        n = mask.sum().item()
+        if 0 < n < median_count:
+            repeats = min(int(median_count / n), factor)
+            weights_per_sample[mask] = float(repeats)
+    return (loss * weights_per_sample).mean()
+
+
 def _objective_static(trial: optuna.Trial, model_name: str, n_epochs: int) -> float:
     from src.data.static_dataset import StaticNIDSDataset
 
@@ -151,16 +174,25 @@ def _objective_static(trial: optuna.Trial, model_name: str, n_epochs: int) -> fl
     ).to(DEVICE)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=params["lr"])
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=n_epochs,
+    )
 
     all_labels = torch.cat([d.y_multi for d in train_loader])
-    weights = compute_class_weights(all_labels, train_ds.n_classes, DEVICE)
+    weights = compute_class_weights(
+        all_labels, train_ds.n_classes, DEVICE,
+        strategy=params.get("weight_strategy", "inverse"),
+    )
     from src.eval.losses import FocalLoss
-    criterion = FocalLoss(weight=weights, gamma=params["focal_gamma"])
+    criterion = FocalLoss(
+        weight=weights, gamma=params["focal_gamma"], reduction="none",
+    )
 
     use_amp = DEVICE.type == "cuda"
     amp_scaler = torch.amp.GradScaler() if use_amp else None
+    osf = params.get("oversample_factor", 1)
 
-    best_val_f1 = 0.0
+    best_macro_f1 = 0.0
 
     for epoch in range(n_epochs):
         model.train()
@@ -168,7 +200,8 @@ def _objective_static(trial: optuna.Trial, model_name: str, n_epochs: int) -> fl
             data = data.to(DEVICE)
             optimizer.zero_grad()
             with torch.amp.autocast(device_type=DEVICE.type, enabled=use_amp):
-                loss = criterion(model(data), data.y_multi)
+                logits = model(data)
+                loss = _oversample_edges(logits, data.y_multi, criterion, osf)
             if amp_scaler:
                 amp_scaler.scale(loss).backward()
                 amp_scaler.step(optimizer)
@@ -176,6 +209,7 @@ def _objective_static(trial: optuna.Trial, model_name: str, n_epochs: int) -> fl
             else:
                 loss.backward()
                 optimizer.step()
+        scheduler.step()
 
         if (epoch + 1) % 5 != 0 and epoch + 1 < n_epochs:
             continue
@@ -190,16 +224,17 @@ def _objective_static(trial: optuna.Trial, model_name: str, n_epochs: int) -> fl
                 all_pred.append(logits.argmax(-1).cpu())
                 all_proba.append(torch.softmax(logits, -1).cpu())
 
-        val_f1 = compute_metrics(
-            torch.cat(all_true), torch.cat(all_pred), torch.cat(all_proba)
-        )["f1"]
+        metrics = compute_metrics(
+            torch.cat(all_true), torch.cat(all_pred), torch.cat(all_proba),
+        )
+        macro_f1 = metrics.get("macro_f1", metrics["f1"])
 
-        best_val_f1 = max(best_val_f1, val_f1)
-        trial.report(val_f1, epoch)
+        best_macro_f1 = max(best_macro_f1, macro_f1)
+        trial.report(macro_f1, epoch)
         if trial.should_prune():
             raise optuna.TrialPruned()
 
-    return best_val_f1
+    return best_macro_f1
 
 
 # ── Objective (temporal) ─────────────────────────────────────────────────────
@@ -317,16 +352,16 @@ def main() -> None:
     study.optimize(objective, n_trials=args.trials, show_progress_bar=True)
 
     best = study.best_trial
-    print(f"\nBest val F1 : {best.value:.4f}")
-    print(f"Best params : {best.params}")
+    print(f"\nBest val macro_f1 : {best.value:.4f}")
+    print(f"Best params       : {best.params}")
 
     out = RESULTS_DIR / f"best_hparams_{args.model}.json"
-    out.write_text(json.dumps({"val_f1": best.value, **best.params}, indent=2))
+    out.write_text(json.dumps({"val_macro_f1": best.value, **best.params}, indent=2))
     print(f"Saved → {out}")
 
     print("\nTop 5 trials:")
     for t in sorted(study.trials, key=lambda t: t.value or 0, reverse=True)[:5]:
-        print(f"  #{t.number:3d}  f1={t.value:.4f}  {t.params}")
+        print(f"  #{t.number:3d}  macro_f1={t.value:.4f}  {t.params}")
 
 
 if __name__ == "__main__":

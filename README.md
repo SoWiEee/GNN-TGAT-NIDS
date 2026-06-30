@@ -100,65 +100,57 @@ flowchart LR
 
 ## Model Performance
 
-Evaluated on NF-UNSW-NB15-v2 test split (~397K flows, 3312 windows).
+Evaluated on NF-UNSW-NB15-v2 test split (~397K flows, 3312 windows). Hyperparameters tuned via Optuna (TPE sampler + MedianPruner, 50 trials).
 
-| Metric | GraphSAGE | GAT | E-GraphSAGE | TGAT | TGN | Ensemble (3) |
-|--------|:---------:|:---:|:-----------:|:----:|:---:|:------------:|
-| **Weighted F1** | **0.9712** | **0.9534** | **0.9708** | **0.9475** | **0.9463** | **0.9700** |
-| Macro F1 | 0.4657 | 0.3164 | 0.4681 | 0.3643 | 0.3438 | 0.4510 |
-| Precision / Recall | 0.979 / 0.966 | 0.973 / 0.943 | 0.978 / 0.967 | 0.963 / 0.939 | 0.961 / 0.935 | 0.979 / 0.965 |
-| ROC-AUC | 0.9992 | 0.9963 | 0.9991 | 0.9963 | 0.9960 | 0.9992 |
-| DR@C-PGD ε=0.1 | 1.0000 | 1.0000 | 1.0000 | 1.0000* | 0.9989* | — |
+| Metric | GraphSAGE | GAT | TGAT | TGN |
+|--------|:---------:|:---:|:----:|:---:|
+| **Weighted F1** | **0.9773** | — | 0.9475 | 0.9463 |
+| **Macro F1** | **0.5735** | — | 0.3643 | 0.3438 |
+| Precision / Recall | 0.982 / 0.974 | — | 0.963 / 0.939 | 0.961 / 0.935 |
+| ROC-AUC | 0.9974 | — | 0.9963 | 0.9960 |
 
-### Adversarial Training
+> GAT retraining with Optuna-tuned hyperparameters is in progress.
 
-| Model | Clean F1 | Adv-Trained F1 | ΔF1 |
-|-------|:--------:|:--------------:|:---:|
-| GraphSAGE | 0.9712 | 0.9753 | **+0.0041** |
-| GAT | 0.9534 | 0.9622 | **+0.0087** |
-| E-GraphSAGE | 0.9708 | — | not yet trained |
-| TGAT / TGN | — | — | not yet trained |
+### Optuna-Tuned Hyperparameters (GraphSAGE)
 
-### Macro F1 Improvement
-
-Using `sqrt_inverse` class weights + `focal_gamma=3.0` + `val_metric=macro_f1` + cosine annealing LR:
-
-| Model | Baseline Macro F1 | Improved Macro F1 | Δ | Weighted F1 |
-|-------|:-----------------:|:-----------------:|:-:|:-----------:|
-| E-GraphSAGE | 0.4681 | **0.5499** | **+0.0818** | 0.9756 |
-| GraphSAGE | 0.4657 | **0.5389** | **+0.0732** | 0.9766 |
-
-Largest per-class gains (GraphSAGE): Shellcode **+0.280**, Analysis **+0.129**, Worms **+0.111**.
-
-Both macro F1 and weighted F1 improved — no trade-off. Configure via:
+Best trial (macro_f1=0.9733 on validation, 50-epoch search):
 
 ```bash
 uv run python train.py model=graphsage \
+    train.lr=0.00124 \
+    train.focal_gamma=1.0 \
+    train.oversample_factor=20 \
     train.class_weight_strategy=sqrt_inverse \
-    train.focal_gamma=3.0 \
     train.val_metric=macro_f1 \
     train.scheduler=cosine \
-    train.patience=20
+    train.patience=30 \
+    model.hidden_dim=256 \
+    model.num_layers=2 \
+    model.dropout=0.0
 ```
 
-### Per-Class F1 (Ensemble)
+Key findings from Optuna search:
+- `sqrt_inverse` class weights consistently outperform `inverse` and `effective`
+- High `oversample_factor` (9-20) is critical for rare class recall
+- Lower `focal_gamma` (1.0) works better than the default 2.0
+- 2-layer models outperform deeper (3-4 layer) architectures
 
-| Class | Support | F1 | Note |
-|-------|--------:|:--:|------|
-| Benign | 369,299 | 0.993 | 93% of test set |
-| Exploits | 11,986 | 0.747 | |
-| Fuzzers | 7,502 | 0.727 | |
-| Reconnaissance | 4,330 | 0.719 | |
-| Shellcode | 576 | 0.417 | |
-| Generic | 1,527 | 0.307 | confused with DoS/Exploits |
-| DoS | 1,587 | 0.206 | confused with Exploits |
-| Backdoor | 234 | 0.162 | |
-| Analysis | 239 | 0.146 | |
-| Worms | 69 | 0.086 | only 69 test samples |
+### Per-Class F1 (GraphSAGE)
 
-> **Why is Macro F1 low?** NF-UNSW-NB15-v2 has extreme class imbalance — Benign accounts for 93% of the test set, while the 5 rarest attack types (DoS, Generic, Backdoor, Analysis, Worms) together represent <1%. Macro F1 weights all 10 classes equally, so the low F1 on rare classes (~0.08-0.42) drags the average down despite near-perfect Benign detection. The model effectively learns a strong binary classifier (Benign vs. Attack) but cannot reliably distinguish between attack subtypes with <2000 samples. Potential mitigations: per-class oversampling, threshold calibration, or hierarchical classification (binary first, then attack subtype).
+| Class | Support | Precision | Recall | F1 |
+|-------|--------:|:---------:|:------:|:--:|
+| Benign | 369,299 | 0.9998 | 0.9894 | 0.9946 |
+| Fuzzers | 7,502 | 0.7378 | 0.8863 | 0.8053 |
+| Reconnaissance | 4,330 | 0.8064 | 0.9293 | 0.8635 |
+| Exploits | 11,986 | 0.8541 | 0.7319 | 0.7882 |
+| Shellcode | 576 | 0.5918 | 0.9236 | 0.7214 |
+| Generic | 1,527 | 0.5835 | 0.5102 | 0.5444 |
+| Worms | 69 | 0.2353 | 0.6957 | 0.3516 |
+| DoS | 1,587 | 0.1993 | 0.4152 | 0.2693 |
+| Backdoor | 234 | 0.1266 | 0.5470 | 0.2056 |
+| Analysis | 239 | 0.1226 | 0.4310 | 0.1909 |
 
-`*` Temporal C-PGD DR uses 256 warm-up + 32 attacked batches. Ensemble: soft-vote over GraphSAGE + GAT + E-GraphSAGE with validation-based weights.
+> **Macro F1 = 0.5735.** The 4 rare attack types (DoS, Backdoor, Analysis, Worms) together have <2000 test samples (<0.5% of the dataset). Despite high recall (0.43-0.70), precision remains low due to false positives from the dominant Benign class. The model achieves strong recall across all classes (worst-case 0.42 for DoS) but struggles with inter-attack discrimination for classes with very few training samples.
 
 ---
 

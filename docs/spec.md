@@ -3,9 +3,9 @@
 > Upload NetFlow traffic -> GNN-based intrusion detection -> interactive graph,
 > alerts, reliability metrics, adversarial comparison, explainability, and report export.
 
-**Version:** 1.1.0  
+**Version:** 1.2.0  
 **Status:** Implementation-aligned draft  
-**Last Updated:** 2026-06-15
+**Last Updated:** 2026-07-01
 
 ---
 
@@ -32,8 +32,7 @@ Out of scope for the current implementation:
 - Authentication and multi-user authorization.
 - Production deployment hardening beyond local/demo CORS and session cleanup.
 - Training through the web UI.
-- Explainability for temporal models.
-- ONNX export for temporal models.
+- ONNX export for temporal models (stateful memory cannot be captured in a single ONNX graph).
 
 ---
 
@@ -135,12 +134,17 @@ Data(
 )
 ```
 
-Node identity:
+Node identity (three strategies, selected automatically by column availability):
 
 - If IP columns are present, endpoints use `(ip, port)` tuples.
-- If IP columns are absent, processed UNSW-style data uses proxy nodes:
+- If TTL columns (`sttl`/`dttl`) are present, TTL-binned proxies:
   - source: `("src", sttl // 16, proto)`
   - destination: `("dst", dttl // 16, service)`
+- If port/protocol columns are present (NF-format datasets like NF-UNSW-NB15-v2):
+  - source: `("src", L7_PROTO, PROTOCOL)`
+  - destination: `("dst", L4_DST_PORT, PROTOCOL)`
+
+All proxy strategies produce ~40-70 distinct nodes per window instead of degenerate 2-node graphs.
 
 Default offline static config (`configs/data/static_default.yaml`):
 
@@ -195,7 +199,7 @@ predict_proba(data) -> torch.Tensor
 
 | Model | Config | Main settings |
 |---|---|---|
-| GraphSAGE | `configs/model/graphsage.yaml` | 3 layers, hidden 256, dropout 0.3, mean aggregation |
+| GraphSAGE | `configs/model/graphsage.yaml` | 2 layers, hidden 256, dropout 0.0, mean aggregation (Optuna-tuned) |
 | GAT | `configs/model/gat.yaml` | 3 layers, hidden 256, 4 heads, dropout 0.3 |
 | TGAT | `configs/model/tgat.yaml` | hidden 172, 2 heads, 20 recent neighbors |
 | TGN | `configs/model/tgn.yaml` | memory 172, time dim 64, hidden 256, 20 neighbors, graph attention |
@@ -223,12 +227,16 @@ Default training settings (`configs/train.yaml`):
 | `train.use_amp` | true on CUDA |
 | `train.loss` | focal |
 | `train.focal_gamma` | 2.0 |
+| `train.class_weight_strategy` | inverse |
+| `train.val_metric` | macro_f1 |
+| `train.scheduler` | cosine |
+| `train.oversample_factor` | 5 |
 | `train.save_every` | 10 |
 | `train.val_every` | 1 |
 | `train.patience` | 0 |
 | `train.adversarial_training` | false |
 
-Class weights are computed from the training split. With `train.loss=focal`, the model uses weighted focal loss; otherwise it uses weighted cross entropy.
+Class weights are computed from the training split using the selected strategy (`inverse`, `sqrt_inverse`, or `effective`). With `train.loss=focal`, the model uses weighted focal loss; otherwise it uses weighted cross entropy. Checkpoint selection uses `train.val_metric` (default `macro_f1`).
 
 Checkpoint outputs:
 
@@ -334,7 +342,7 @@ Returns original/adversarial prediction, confidence, raw-scale features, CSR, an
 | `POST` | `/explain/{session_id}` | Explain one `edge_idx` |
 | `POST` | `/explain-top/{session_id}` | Explain top-K confident alerts |
 
-Only `graphsage` and `gat` are accepted. Temporal models return HTTP 400 for explainability requests.
+Static models (`graphsage`, `gat`) use GNNExplainer with semantic feature and class names. Temporal models (`tgat`, `tgn`) use integrated gradients approximation.
 
 ### 6.4 Reports and Metrics
 
@@ -403,36 +411,36 @@ API base URL is `VITE_API_BASE_URL` or `http://localhost:8000` by default.
 
 The current tracked metrics file is `data/metrics/reliability.json`.
 
-| Model | Clean test F1 | Precision | Recall | ROC-AUC | Notes |
-|---|---:|---:|---:|---:|---|
-| GraphSAGE | 0.9712 | 0.9792 | 0.9660 | 0.9992 | Static clean metric |
-| GAT | 0.9534 | 0.9729 | 0.9433 | 0.9963 | Static clean metric |
-| TGAT | 0.9475 | 0.9632 | 0.9391 | 0.9963 | Temporal, 30 epochs |
-| TGN | 0.9463 | 0.9610 | 0.9351 | 0.9960 | Temporal, 30 epochs |
-| Ensemble | 0.9670 | 0.9783 | 0.9604 | 0.9988 | Static GraphSAGE+GAT soft vote |
-| GraphSAGE + adv training | 0.9753 | 0.9803 | 0.9727 | 0.9997 | C-PGD augmented training, eps=0.1, steps=10, ratio=0.3 |
-| GAT + adv training | 0.9622 | 0.9696 | 0.9581 | 0.9965 | C-PGD augmented training, eps=0.1, steps=10, ratio=0.3 |
+### 8.1 Clean Performance (Optuna-tuned)
 
-Reliability C-PGD detection-rate metrics currently recorded:
+| Model | Weighted F1 | Macro F1 | Precision | Recall | ROC-AUC | Notes |
+|---|---:|---:|---:|---:|---:|---|
+| GraphSAGE | 0.9773 | 0.5735 | 0.9818 | 0.9742 | 0.9974 | Optuna-tuned: lr=0.00124, γ=1.0, oversample=20, sqrt_inverse, 2 layers |
+| TGAT | 0.9475 | 0.3643 | 0.9632 | 0.9391 | 0.9963 | Temporal, 30 epochs |
+| TGN | 0.9463 | 0.3438 | 0.9610 | 0.9351 | 0.9960 | Temporal, 30 epochs |
+
+Hyperparameters were tuned via Optuna (TPE sampler + MedianPruner, 50 trials × 50 epochs). Key findings: `sqrt_inverse` class weights, high `oversample_factor` (9-20), and lower `focal_gamma` (1.0) consistently outperform defaults.
+
+### 8.2 ONNX Export
+
+Static models can be exported to ONNX format with optional INT8 dynamic quantization:
+
+| Format | Size | Prediction Agreement vs PyTorch |
+|---|---:|---:|
+| PyTorch checkpoint (FP32) | 1,612 KB | — |
+| ONNX FP32 | 1,613 KB | 100.00% |
+| ONNX INT8 quantized | 433 KB (73% reduction) | 99.17% |
+
+CPU inference latency (single graph, 120 edges): PyTorch 0.96 ms, ONNX-FP32 0.77 ms, ONNX-INT8 0.99 ms.
+
+### 8.3 Adversarial Robustness
+
+Reliability C-PGD detection-rate metrics:
 
 | Model | `dr_under_cpgd_eps01` | Scope |
 |---|---:|---|
-| GraphSAGE | 1.0000 | full static test split: 3312 windows, 32804 attack edges, raw `ConstraintSet` projection |
-| GAT | 1.0000 | full static test split: 3312 windows, 35113 attack edges, raw `ConstraintSet` projection |
 | TGAT | 1.0000 | sampled temporal C-PGD: 32 test batches, 1896 attack edges, 256 warm-up batches |
 | TGN | 0.9989 | sampled temporal C-PGD: 32 test batches, 1896 attack edges, 256 warm-up batches |
-| Ensemble | null | clean-only static ensemble experiment |
-
-Reliability deltas currently recorded:
-
-| Model | `delta_f1_after_adv_training` |
-|---|---:|
-| GraphSAGE | 0.0041 |
-| GAT | 0.0087 |
-| TGAT | null |
-| TGN | null |
-
-Static C-PGD is now a full-test sweep using batched window evaluation:
 
 ```bash
 python scripts/compute_reliability_metrics.py \
@@ -442,24 +450,11 @@ python scripts/compute_reliability_metrics.py \
   --include-ensemble
 ```
 
-Temporal C-PGD is implemented as constrained message-space PGD with
-normalized clip bounds and an L-infinity budget. The recorded temporal DR is a
-bounded experiment, not a full 508010-event temporal sweep:
-
-```bash
-python scripts/compute_reliability_metrics.py \
-  --models tgat,tgn \
-  --attack-only \
-  --steps 40 \
-  --temporal-warmup-max-batches 256 \
-  --temporal-cpgd-max-batches 32
-```
-
 Cross-dataset validation is available through
 `scripts/cross_dataset_validation.py`. The tracked demo run uses
 `data/demo/demo_flows.csv`; it is marked skipped in
 `data/metrics/cross_dataset_validation.json` because the demo schema has 39
-features while the current static checkpoints expect the 42-feature pipeline.
+features while the current static checkpoints expect the 41-feature pipeline.
 
 ---
 
@@ -512,7 +507,7 @@ npm run build
 - Web upload inference rebuilds temporary static graphs per request; this is acceptable for demo-sized CSVs but expensive for large files.
 - Offline static training uses 120-second windows, while web inference/explainability/streaming currently default to 60 seconds.
 - C-PGD web comparison builds a minimal single-edge graph with dummy node features. This is useful for reports but not identical to perturbing inside the original full graph context.
-- Temporal models can be loaded for inference when checkpoints are present, but explainability and C-PGD web comparison are static-model oriented.
+- Temporal models can be loaded for inference when checkpoints are present; explainability uses integrated gradients for temporal models.
 - Web inference loads complete model objects with `torch.load(..., weights_only=False)`, so checkpoints must be trusted.
 - `scaler.json` is preferred by C-PGD; `scaler.pkl` remains a fallback.
 - Session storage is local filesystem state, not distributed storage.
