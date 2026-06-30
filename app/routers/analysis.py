@@ -2,19 +2,24 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import uuid
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, UploadFile
 
 from app.schemas import AnalyzeRequest, AnalyzeResponse, StatusResponse
 from app.services.inference import run_inference
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["analysis"])
 
 SESSIONS_DIR = Path("data/sessions")
-MAX_UPLOAD_BYTES = int(50 * 1024 * 1024)  # 50 MB
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(50 * 1024 * 1024)))
+
+VALID_SORT_FIELDS = {"confidence", "timestamp", "attack_type"}
 
 
 def _session_dir(session_id: UUID) -> Path:
@@ -66,8 +71,9 @@ async def _run_analysis_bg(session_id: UUID, model_name: str) -> None:
         result = await run_inference(str(csv_path), model_name, session_id)
         _atomic_write_json(sdir / "result.json", result)
         _write_status(session_id, "ready", 100.0)
-    except Exception as exc:
-        _write_status(session_id, "error", 0.0, str(exc))
+    except Exception:
+        logger.exception("Inference failed for session %s", session_id)
+        _write_status(session_id, "error", 0.0, "Analysis failed. Check server logs.")
         raise
 
 
@@ -98,7 +104,10 @@ def _load_result(session_id: UUID) -> dict:
 
 
 @router.get("/graph/{session_id}")
-async def get_graph(session_id: UUID, max_edges: int = 2000):
+async def get_graph(
+    session_id: UUID,
+    max_edges: int = Query(default=2000, ge=10, le=10000),
+):
     result = _load_result(session_id)
     graph = result.get("graph", {"nodes": [], "edges": []})
     # Truncate edges by confidence (descending) to max_edges
@@ -112,9 +121,9 @@ async def get_graph(session_id: UUID, max_edges: int = 2000):
 @router.get("/alerts/{session_id}")
 async def get_alerts(
     session_id: UUID,
-    sort: str = "confidence",
-    page: int = 1,
-    limit: int = 50,
+    sort: str = Query(default="confidence", pattern="^(confidence|timestamp|attack_type)$"),
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=50, ge=1, le=200),
     attack_type: str = "",
 ):
     result = _load_result(session_id)
@@ -123,6 +132,10 @@ async def get_alerts(
         alerts = [a for a in alerts if a.get("attack_type", "").lower() == attack_type.lower()]
     if sort == "confidence":
         alerts = sorted(alerts, key=lambda a: a.get("confidence", 0), reverse=True)
+    elif sort == "timestamp":
+        alerts = sorted(alerts, key=lambda a: a.get("timestamp", 0), reverse=True)
+    elif sort == "attack_type":
+        alerts = sorted(alerts, key=lambda a: a.get("attack_type", ""))
     total = len(alerts)
     start = (page - 1) * limit
     return {"alerts": alerts[start : start + limit], "total": total}

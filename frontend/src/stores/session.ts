@@ -3,8 +3,10 @@ import { ref, computed } from 'vue'
 import { api } from '@/api'
 import type { Alert, CyNode, CyEdge, TimelineResponse, ReliabilityMetrics, AdversarialResult, ExplainResult } from '@/api'
 
+const MAX_UPLOAD_BYTES = Number(import.meta.env.VITE_MAX_UPLOAD_BYTES ?? 50 * 1024 * 1024)
+const POLL_INTERVAL_MS = Number(import.meta.env.VITE_POLL_INTERVAL_MS ?? 2000)
+
 export const useSessionStore = defineStore('session', () => {
-  const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
   const sessionId = ref<string | null>(null)
   const status = ref<'idle' | 'uploading' | 'analyzing' | 'ready' | 'error'>('idle')
   const progressPct = ref(0)
@@ -53,7 +55,7 @@ export const useSessionStore = defineStore('session', () => {
         status.value = 'error'
         errorMessage.value = 'Lost connection to server'
       }
-    }, 2000)
+    }, POLL_INTERVAL_MS)
   }
 
   async function _loadResults(sid: string) {

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import os
 from pathlib import Path
 from uuid import UUID
 
@@ -11,10 +13,11 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.schemas import AdversarialRequest
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["adversarial"])
 
 SESSIONS_DIR = Path("data/sessions")
-ADV_TIMEOUT_SECONDS = 30.0
+ADV_TIMEOUT_SECONDS = float(os.getenv("ADV_TIMEOUT_SECONDS", "30.0"))
 
 
 def _cache_path(session_id: UUID, flow_id: str, epsilon: float, steps: int) -> Path:
@@ -61,8 +64,9 @@ async def generate_adversarial(req: AdversarialRequest):
         raise HTTPException(408, detail="Adversarial generation timed out (>30 s).")
     except FileNotFoundError as exc:
         raise HTTPException(404, detail=str(exc))
-    except Exception as exc:
-        raise HTTPException(500, detail=f"C-PGD failed: {exc}")
+    except Exception:
+        logger.exception("C-PGD failed for session %s", req.session_id)
+        raise HTTPException(500, detail="Adversarial generation failed")
 
     # Persist cache
     cache.write_text(json.dumps(result))

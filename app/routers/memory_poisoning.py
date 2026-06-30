@@ -1,6 +1,7 @@
 """Memory poisoning experiment router for temporal models."""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import torch
@@ -11,6 +12,7 @@ from torch_geometric.loader import TemporalDataLoader
 
 from app.schemas import MemoryPoisoningRequest
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["memory-poisoning"])
 
 TEMPORAL_DIR = Path("data/processed/temporal")
@@ -131,5 +133,6 @@ async def run_memory_poisoning(req: MemoryPoisoningRequest):
         return await run_in_threadpool(_sync_run_memory_poisoning, req)
     except FileNotFoundError as exc:
         raise HTTPException(404, detail=str(exc))
-    except Exception as exc:
-        raise HTTPException(500, detail=f"Memory poisoning experiment failed: {exc}")
+    except Exception:
+        logger.exception("Memory poisoning experiment failed")
+        raise HTTPException(500, detail="Memory poisoning experiment failed")

@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 SESSIONS_DIR = Path("data/sessions")
 SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_SECONDS", "3600"))
-CLEANUP_INTERVAL_SECONDS = 300  # check every 5 minutes
+CLEANUP_INTERVAL_SECONDS = int(os.getenv("CLEANUP_INTERVAL_SECONDS", "300"))
 
 
 async def _cleanup_sessions() -> None:

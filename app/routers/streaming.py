@@ -21,6 +21,7 @@ import csv
 import io
 import json
 import logging
+import os
 import time
 
 import torch
@@ -31,8 +32,10 @@ from app.services.inference import get_model
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["streaming"])
 
-DEFAULT_WINDOW_SECONDS = 60.0
-MAX_BUFFER_SIZE = 10_000
+DEFAULT_WINDOW_SECONDS = float(os.getenv("WS_DEFAULT_WINDOW_SECONDS", "60.0"))
+MAX_BUFFER_SIZE = int(os.getenv("WS_MAX_BUFFER_SIZE", "10000"))
+MIN_WINDOW_SECONDS = 1.0
+MAX_WINDOW_SECONDS = 3600.0
 
 
 class StreamingSession:
@@ -160,9 +163,9 @@ class StreamingSession:
                     "detection_rate": round(total_attacks / max(total_flows, 1), 4),
                 },
             }
-        except Exception as exc:
-            logger.error("Streaming inference error: %s", exc)
-            return {"type": "error", "message": str(exc)}
+        except Exception:
+            logger.exception("Streaming inference error")
+            return {"type": "error", "message": "Inference failed for this window"}
 
     def _flows_to_csv(self, flows: list[dict]) -> str | None:
         if not flows:
@@ -184,10 +187,18 @@ async def websocket_stream(
     """WebSocket endpoint for real-time NetFlow analysis."""
     await websocket.accept()
 
+    if not (MIN_WINDOW_SECONDS <= window_seconds <= MAX_WINDOW_SECONDS):
+        await websocket.send_json({
+            "type": "error",
+            "message": f"window_seconds must be {MIN_WINDOW_SECONDS}-{MAX_WINDOW_SECONDS}",
+        })
+        await websocket.close(code=1008)
+        return
+
     try:
         get_model(model)
-    except ValueError as exc:
-        await websocket.send_json({"type": "error", "message": str(exc)})
+    except ValueError:
+        await websocket.send_json({"type": "error", "message": f"Unknown model: {model}"})
         await websocket.close(code=1008)
         return
 
