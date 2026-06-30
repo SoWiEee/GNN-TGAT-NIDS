@@ -178,6 +178,7 @@ uv run python train.py model=graphsage \
 |-------|--------|:-----------:|:--------:|:------:|
 | GraphSAGE | 基線（`inverse`, γ=2.0, val=f1） | 0.1063 | 0.1645 | 0.0639 |
 | GraphSAGE | Optuna 最佳（`sqrt_inverse`, γ=1.0, oversample=20） | **0.9773** | **0.5735** | **0.9742** |
+| GAT | Optuna 最佳（`sqrt_inverse`, γ=1.0, oversample=3） | 0.9585 | 0.4036 | 0.9526 |
 
 ### 每類別 F1（GraphSAGE，Optuna 最佳設定）
 
@@ -198,8 +199,22 @@ uv run python train.py model=graphsage \
 - `sqrt_inverse` 類別權重一致優於 `inverse` 和 `effective`
 - 高 `oversample_factor`（9-20）對稀有類別的 recall 至關重要
 - 較低的 `focal_gamma`（1.0）比預設的 2.0 效果更好
-- 2 層模型優於較深的 3-4 層架構
+- GraphSAGE 淺層（2 層）優於較深的 3-4 層架構；GAT 則 3 層表現較好
 - 混淆主要在攻擊子類型之間（DoS↔Exploits、Generic↔DoS/Exploits），非 benign vs attack
+
+### GAT Optuna 最佳超參數
+
+Best trial（macro_f1=0.9674 on validation, 13 trials × 30 epochs）：
+
+```bash
+uv run python train.py model=gat \
+    train.lr=0.00288 train.focal_gamma=1.0 train.oversample_factor=3 \
+    train.class_weight_strategy=sqrt_inverse train.val_metric=macro_f1 \
+    train.scheduler=cosine train.patience=30 \
+    model.hidden_dim=128 model.num_layers=3 model.dropout=0.4 model.num_heads=4
+```
+
+GAT 與 GraphSAGE 的差異：較深的網路（3 層 vs 2 層）、更高的 dropout（0.4 vs 0.0）、較低的 oversample_factor（3 vs 20）。GAT 的多頭注意力機制提供隱式正則化，降低了對過取樣的依賴。
 
 ---
 
