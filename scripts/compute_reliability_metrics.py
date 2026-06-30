@@ -96,7 +96,8 @@ def load_model(name: str) -> torch.nn.Module | None:
     if not path.exists():
         logger.warning("Checkpoint not found: %s — skipping %s", path, name)
         return None
-    model = torch.load(path, map_location="cpu", weights_only=False)
+    from app.services.torch_load import load_torch_artifact
+    model = load_torch_artifact(path)
     model.eval()
     logger.info("Loaded %s from %s", name, path)
     return model
@@ -447,8 +448,9 @@ def main() -> None:
     temporal_train_loader = None
     temporal_test_loader = None
     if temporal_available:
-        train_td = torch.load(TEMPORAL_DIR / "train.pt", weights_only=False)
-        test_td = torch.load(TEMPORAL_DIR / "test.pt", weights_only=False)
+        from app.services.torch_load import load_torch_artifact
+        train_td = load_torch_artifact(TEMPORAL_DIR / "train.pt")
+        test_td = load_torch_artifact(TEMPORAL_DIR / "test.pt")
         temporal_train_loader = TemporalDataLoader(train_td, batch_size=200)
         temporal_test_loader = TemporalDataLoader(test_td, batch_size=200)
         logger.info("Temporal test split: %d events", len(test_td.src))
@@ -535,7 +537,7 @@ def main() -> None:
         adv_path = Path(args.checkpoints_dir) / f"{name}_adv_best.pt"
         if not args.attack_only and adv_path.exists() and adv_path.stat().st_size > 0:
             logger.info("[%s] Adversarially-trained checkpoint found — computing ΔF1 …", name)
-            adv_model = torch.load(adv_path, map_location="cpu", weights_only=False)
+            adv_model = load_torch_artifact(adv_path)
             adv_model.eval()
             if is_temporal and temporal_available:
                 adv_metrics = evaluate_clean_temporal(

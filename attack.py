@@ -53,7 +53,8 @@ def main(cfg: DictConfig) -> None:
             f"Train the model first: uv run python train.py model={model_name}"
         )
 
-    model = torch.load(ckpt_path, map_location=device, weights_only=False)
+    from app.services.torch_load import load_torch_artifact
+    model = load_torch_artifact(ckpt_path, map_location=str(device))
     model.eval()
     log.info("Loaded model from %s", ckpt_path)
 
@@ -71,7 +72,7 @@ def main(cfg: DictConfig) -> None:
                 f"Temporal data not found at {split_path}. "
                 "Run: uv run python src/data/temporal_builder.py"
             )
-        data = torch.load(split_path, weights_only=False)
+        data = load_torch_artifact(split_path)
         loader = TemporalDataLoader(data, batch_size=200)
         log.info("Loaded temporal %s split (%d events)", target_split, len(data.src))
     else:

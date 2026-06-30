@@ -20,7 +20,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pandas as pd
-import torch
 from torch_geometric.loader import DataLoader
 
 from scripts.compute_reliability_metrics import evaluate_clean
@@ -61,7 +60,8 @@ def _load_model(name: str, checkpoints_dir: Path):
     path = checkpoints_dir / f"{name}_best.pt"
     if not path.exists():
         return None
-    model = torch.load(path, map_location="cpu", weights_only=False)
+    from app.services.torch_load import load_torch_artifact
+    model = load_torch_artifact(path)
     model.eval()
     return model
 

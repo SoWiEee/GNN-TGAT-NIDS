@@ -222,6 +222,8 @@ uv run optuna-dashboard sqlite:///results/optuna.db
 
 支援中斷恢復（SQLite 儲存）。最佳參數儲存於 `results/best_hparams_{model}.json`。
 
+> **注意：** 靜態和時序模型的 Optuna 搜索均以 **macro F1** 為最佳化目標，確保稀有攻擊類型也得到適當的調校。
+
 **搜索空間（靜態模型）：**
 
 | 超參數 | 範圍 / 選項 |
@@ -277,6 +279,10 @@ uv run python train.py model=gat train.adversarial_training=true \
 ```
 
 儲存為 `{model}_adv_best.pt`。`compute_reliability_metrics.py` 會自動載入 `_adv_best.pt` 檔案。
+
+### 訓練結束時的 Per-class F1 輸出
+
+`train.py` 在最終測試評估後會自動輸出每類別的 Precision/Recall/F1，方便在不執行完整 reliability 腳本的情況下快速檢視各攻擊類型的表現。
 
 ---
 

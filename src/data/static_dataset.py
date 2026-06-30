@@ -7,7 +7,6 @@ import pickle
 from pathlib import Path
 from typing import Any
 
-import torch
 from torch_geometric.data import Data, Dataset
 
 
@@ -69,11 +68,8 @@ class StaticNIDSDataset(Dataset):
         return len(self._files)
 
     def get(self, idx: int) -> Data:
-        # weights_only=False is required: PyG Data objects contain non-tensor
-        # attributes (edge_index metadata, etc.) that cannot be loaded safely
-        # with weights_only=True.  Files are produced by this codebase, so
-        # the pickle execution risk is acceptable.
-        return torch.load(self._files[idx], weights_only=False)
+        from app.services.torch_load import load_torch_artifact
+        return load_torch_artifact(self._files[idx])
 
     # ── Metadata helpers ─────────────────────────────────────────────────────
 

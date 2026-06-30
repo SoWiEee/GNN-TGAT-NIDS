@@ -56,7 +56,8 @@ def export_model(model_name: str, output_path: Path, quantize: bool = False) -> 
         logger.error("Checkpoint not found: %s", ckpt_path)
         raise SystemExit(1)
 
-    model = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    from app.services.torch_load import load_torch_artifact
+    model = load_torch_artifact(ckpt_path)
     model.eval()
     logger.info("Loaded %s from %s", model_name, ckpt_path)
 
@@ -73,7 +74,7 @@ def export_model(model_name: str, output_path: Path, quantize: bool = False) -> 
 
     sample_path = STATIC_DIR / "test" / "00000.pt"
     if sample_path.exists():
-        sample = torch.load(sample_path, map_location="cpu", weights_only=False)
+        sample = load_torch_artifact(sample_path)
         n_node_features = sample.x.shape[1]
     else:
         n_node_features = n_edge_features

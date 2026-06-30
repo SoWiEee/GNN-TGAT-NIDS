@@ -245,8 +245,9 @@ def _objective_temporal(trial: optuna.Trial, model_name: str, n_epochs: int) -> 
     with open(TEMPORAL_DIR / "meta.json") as f:
         meta = json.load(f)
 
-    train_td = torch.load(TEMPORAL_DIR / "train.pt", weights_only=False)
-    val_td = torch.load(TEMPORAL_DIR / "val.pt", weights_only=False)
+    from app.services.torch_load import load_torch_artifact
+    train_td = load_torch_artifact(TEMPORAL_DIR / "train.pt")
+    val_td = load_torch_artifact(TEMPORAL_DIR / "val.pt")
 
     bs = params["batch_size"]
     train_loader = TemporalDataLoader(train_td, batch_size=bs)
@@ -267,7 +268,7 @@ def _objective_temporal(trial: optuna.Trial, model_name: str, n_epochs: int) -> 
     use_amp = DEVICE.type == "cuda"
     amp_scaler = torch.amp.GradScaler() if use_amp else None
 
-    best_val_f1 = 0.0
+    best_macro_f1 = 0.0
 
     for epoch in range(n_epochs):
         model.train()
@@ -301,16 +302,17 @@ def _objective_temporal(trial: optuna.Trial, model_name: str, n_epochs: int) -> 
                 all_pred.append(logits.argmax(-1).cpu())
                 all_proba.append(torch.softmax(logits, -1).cpu())
 
-        val_f1 = compute_metrics(
-            torch.cat(all_true), torch.cat(all_pred), torch.cat(all_proba)
-        )["f1"]
+        macro = compute_metrics(
+            torch.cat(all_true), torch.cat(all_pred), y_proba=None, average="macro",
+        )
+        macro_f1 = macro["f1"]
 
-        best_val_f1 = max(best_val_f1, val_f1)
-        trial.report(val_f1, epoch)
+        best_macro_f1 = max(best_macro_f1, macro_f1)
+        trial.report(macro_f1, epoch)
         if trial.should_prune():
             raise optuna.TrialPruned()
 
-    return best_val_f1
+    return best_macro_f1
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────

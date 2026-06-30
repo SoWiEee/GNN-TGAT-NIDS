@@ -196,7 +196,8 @@ def _build_temporal_loaders(cfg: DictConfig) -> tuple:
     batch = cfg.train.get("batch_size", 200)
 
     def _load(split: str) -> TemporalData:
-        return torch.load(processed_dir / f"{split}.pt", weights_only=False)
+        from app.services.torch_load import load_torch_artifact
+        return load_torch_artifact(processed_dir / f"{split}.pt")
 
     train_loader = TemporalDataLoader(_load("train"), batch_size=batch)
     val_loader   = TemporalDataLoader(_load("val"),   batch_size=batch)
@@ -297,6 +298,48 @@ def _evaluate_temporal(
     metrics["macro_f1"] = macro["f1"]
     metrics["loss"] = total_loss / max(total_edges, 1)
     return metrics
+
+
+def _log_per_class_f1(
+    loader,
+    model: torch.nn.Module,
+    device: torch.device,
+    is_temporal: bool,
+    n_classes: int,
+) -> None:
+    """Log per-class precision/recall/F1 breakdown after test evaluation."""
+    import json
+
+    from src.eval.metrics import compute_per_class_metrics
+
+    label2idx_path = Path("data/processed/static/label2idx.json")
+    label_names = None
+    if label2idx_path.exists():
+        label2idx = json.loads(label2idx_path.read_text())
+        idx2label = {v: k for k, v in label2idx.items()}
+        label_names = [idx2label.get(i, str(i)) for i in range(n_classes)]
+
+    all_true, all_pred = [], []
+    model.eval()
+    with torch.no_grad():
+        for data in loader:
+            data = data.to(device)
+            logits = model(data)
+            labels = data.y if is_temporal else data.y_multi
+            all_true.append(labels.cpu())
+            all_pred.append(logits.argmax(-1).cpu())
+
+    report = compute_per_class_metrics(
+        torch.cat(all_true), torch.cat(all_pred), label_names,
+    )
+
+    log.info("Per-class F1 breakdown:")
+    for entry in report["per_class"]:
+        log.info(
+            "  %-16s  P=%.4f  R=%.4f  F1=%.4f  support=%d",
+            entry["name"], entry["precision"], entry["recall"],
+            entry["f1"], entry["support"],
+        )
 
 
 @hydra.main(version_base=None, config_path="configs", config_name="train")
@@ -562,6 +605,8 @@ def main(cfg: DictConfig) -> None:
         test_metrics.get("recall", 0.0),
         test_metrics.get("roc_auc", 0.0),
     )
+
+    _log_per_class_f1(test_loader, model, device, is_temporal, n_classes)
 
 
 if __name__ == "__main__":

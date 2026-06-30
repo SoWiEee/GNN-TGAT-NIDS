@@ -38,6 +38,9 @@
 | 硬編碼常數 | LOW | 後端 `os.getenv()` + 前端 `import.meta.env` 配置化 |
 | 缺少 API 端點測試 | HIGH | 新增 23 個 API 測試 |
 | 無測試覆蓋率設定 | LOW | `pyproject.toml` 加入 `--cov` |
+| 訓練結束無 per-class F1 輸出 | LOW | `train.py` 加入 `_log_per_class_f1()` |
+| Temporal Optuna 最佳化目標為 weighted F1（非 macro） | MEDIUM | 改為 macro_f1（與 static 一致） |
+| `torch.load` 散落在 scripts/src | LOW | 全面集中至 `app/services/torch_load.py` |
 
 ---
 
