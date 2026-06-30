@@ -46,7 +46,7 @@
           t={{ result.timestamp.toFixed(1) }}s
         </span>
         <span class="class-badge" :class="result.predicted_class > 0 ? 'attack' : 'benign'">
-          Class {{ result.predicted_class }}
+          {{ result.predicted_label ?? `Class ${result.predicted_class}` }}
         </span>
         <span class="confidence">{{ (result.confidence * 100).toFixed(1) }}%</span>
         <span v-if="result.method" class="method-tag">{{ result.method }}</span>
@@ -241,7 +241,7 @@ h2 { font-size: 18px; }
 
 .bar-row {
   display: grid;
-  grid-template-columns: 140px 1fr 60px;
+  grid-template-columns: 240px 1fr 60px;
   align-items: center;
   gap: 10px;
   margin-bottom: 6px;

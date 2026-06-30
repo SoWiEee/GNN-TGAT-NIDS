@@ -16,6 +16,7 @@ router = APIRouter(tags=["explain"])
 
 SESSIONS_DIR = Path("data/sessions")
 TEMPORAL_MODELS = {"tgat", "tgn"}
+_LABEL2IDX_PATH = Path("data/processed/static/label2idx.json")
 
 
 class ExplainRequest(BaseModel):
@@ -31,7 +32,7 @@ class ExplainTopRequest(BaseModel):
 
 
 def _load_session_data(session_id: UUID):
-    """Load PyG data from a completed session's result."""
+    """Load PyG data and metadata from a completed session's result."""
     import tempfile
 
     from src.data.static_builder import build_static_graphs
@@ -43,7 +44,7 @@ def _load_session_data(session_id: UUID):
         raise HTTPException(404, detail="Session not found")
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        build_static_graphs(
+        meta = build_static_graphs(
             csv_path=str(csv_path),
             output_dir=tmpdir,
             window_size_s=60.0,
@@ -53,7 +54,7 @@ def _load_session_data(session_id: UUID):
         dataset = StaticNIDSDataset(root=tmpdir, split="train")
         all_data = [data for data in dataset]
 
-    return all_data
+    return all_data, meta
 
 
 def _load_session_temporal_data(session_id: UUID):
@@ -70,24 +71,36 @@ def _load_session_temporal_data(session_id: UUID):
     return torch.load(test_path, weights_only=False)
 
 
+def _build_class_names(label2idx: dict[str, int]) -> dict[int, str]:
+    """Invert label2idx to get idx→name mapping."""
+    return {v: k for k, v in label2idx.items()}
+
+
 def _sync_explain_flow(session_id: UUID, model_name: str, edge_idx: int, epochs: int) -> dict:
     from src.explain.gnn_explainer import explain_flow
 
     model = get_model(model_name)
-    all_data = _load_session_data(session_id)
+    all_data, meta = _load_session_data(session_id)
+    feature_names = meta.get("feature_cols")
+    class_names = _build_class_names(meta.get("label2idx", {}))
 
     cumulative_edges = 0
     for data in all_data:
         n_edges = data.edge_index.shape[1]
         if edge_idx < cumulative_edges + n_edges:
             local_idx = edge_idx - cumulative_edges
-            return explain_flow(model, data, local_idx, epochs=epochs)
+            return explain_flow(
+                model, data, local_idx, epochs=epochs,
+                feature_names=feature_names, class_names=class_names,
+            )
         cumulative_edges += n_edges
 
     raise HTTPException(400, detail=f"edge_idx {edge_idx} out of range (total: {cumulative_edges})")
 
 
 def _sync_explain_temporal_flow(session_id: UUID, model_name: str, edge_idx: int) -> dict:
+    import json
+
     from src.explain.temporal_explainer import explain_temporal_flow
 
     model = get_model(model_name)
@@ -97,18 +110,35 @@ def _sync_explain_temporal_flow(session_id: UUID, model_name: str, edge_idx: int
         raise HTTPException(
             400, detail=f"edge_idx {edge_idx} out of range (total: {total})",
         )
-    return explain_temporal_flow(model, batch, edge_idx)
+
+    feature_names = None
+    class_names = None
+    meta_path = Path("data/processed/static/meta.json")
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text())
+        feature_names = meta.get("feature_cols")
+        class_names = _build_class_names(meta.get("label2idx", {}))
+
+    return explain_temporal_flow(
+        model, batch, edge_idx,
+        feature_names=feature_names, class_names=class_names,
+    )
 
 
 def _sync_explain_top(session_id: UUID, model_name: str, top_k: int, epochs: int) -> list:
     from src.explain.gnn_explainer import explain_top_alerts
 
     model = get_model(model_name)
-    all_data = _load_session_data(session_id)
+    all_data, meta = _load_session_data(session_id)
+    feature_names = meta.get("feature_cols")
+    class_names = _build_class_names(meta.get("label2idx", {}))
 
     all_results = []
     for window_idx, data in enumerate(all_data):
-        results = explain_top_alerts(model, data, top_k=top_k, epochs=epochs)
+        results = explain_top_alerts(
+            model, data, top_k=top_k, epochs=epochs,
+            feature_names=feature_names, class_names=class_names,
+        )
         for r in results:
             r["window"] = window_idx
         all_results.extend(results)
@@ -118,11 +148,25 @@ def _sync_explain_top(session_id: UUID, model_name: str, top_k: int, epochs: int
 
 
 def _sync_explain_temporal_top(session_id: UUID, model_name: str, top_k: int) -> list:
+    import json
+
     from src.explain.temporal_explainer import explain_temporal_top_alerts
 
     model = get_model(model_name)
     batch = _load_session_temporal_data(session_id)
-    return explain_temporal_top_alerts(model, batch, top_k=top_k)
+
+    feature_names = None
+    class_names = None
+    meta_path = Path("data/processed/static/meta.json")
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text())
+        feature_names = meta.get("feature_cols")
+        class_names = _build_class_names(meta.get("label2idx", {}))
+
+    return explain_temporal_top_alerts(
+        model, batch, top_k=top_k,
+        feature_names=feature_names, class_names=class_names,
+    )
 
 
 @router.post("/explain/{session_id}")

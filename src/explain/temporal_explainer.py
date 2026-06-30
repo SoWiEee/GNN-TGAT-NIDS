@@ -66,6 +66,7 @@ def explain_temporal_flow(
     edge_idx: int,
     n_steps: int = 20,
     feature_names: list[str] | None = None,
+    class_names: dict[int, str] | None = None,
 ) -> dict:
     """Explain a single temporal edge prediction via gradient attribution."""
     model.eval()
@@ -93,12 +94,16 @@ def explain_temporal_flow(
             "attribution": round(float(attribution[idx]), 6),
         })
 
+    fallback = f"Class {pred_class}"
+    predicted_label = class_names.get(pred_class, fallback) if class_names else fallback
+
     return {
         "edge_idx": edge_idx,
         "src": int(batch.src[edge_idx]),
         "dst": int(batch.dst[edge_idx]),
         "timestamp": float(batch.t[edge_idx]),
         "predicted_class": pred_class,
+        "predicted_label": predicted_label,
         "confidence": round(confidence, 4),
         "feature_attribution": attr_norm.cpu().tolist(),
         "top_features": top_features,
@@ -112,6 +117,7 @@ def explain_temporal_top_alerts(
     top_k: int = 5,
     n_steps: int = 20,
     feature_names: list[str] | None = None,
+    class_names: dict[int, str] | None = None,
 ) -> list[dict]:
     """Explain the top-K most confident attack predictions in a temporal batch."""
     model.eval()
@@ -132,7 +138,7 @@ def explain_temporal_top_alerts(
     for rank, idx in enumerate(top_indices):
         edge_idx = int(attack_indices[idx])
         logger.info("Explaining temporal edge %d (rank %d/%d)", edge_idx, rank + 1, top_k)
-        result = explain_temporal_flow(model, batch, edge_idx, n_steps, feature_names)
+        result = explain_temporal_flow(model, batch, edge_idx, n_steps, feature_names, class_names)
         result["rank"] = rank + 1
         results.append(result)
 

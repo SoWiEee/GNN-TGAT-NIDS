@@ -60,6 +60,8 @@ def explain_flow(
     data: Data,
     edge_idx: int,
     epochs: int = 200,
+    feature_names: list[str] | None = None,
+    class_names: dict[int, str] | None = None,
 ) -> dict:
     """Explain a single flow (edge) prediction.
 
@@ -119,7 +121,12 @@ def explain_flow(
     if node_mask is not None:
         combined = (node_mask[src_node] + node_mask[dst_node]) / 2.0
         for i, score in enumerate(combined.cpu().tolist()):
-            feature_importance[f"node_feat_{i}"] = round(score, 6)
+            name = (
+                feature_names[i]
+                if feature_names and i < len(feature_names)
+                else f"node_feat_{i}"
+            )
+            feature_importance[name] = round(score, 6)
 
     if edge_mask is not None and data.edge_attr is not None:
         edge_weight = float(edge_mask[edge_idx]) if edge_idx < len(edge_mask) else 0.0
@@ -130,11 +137,15 @@ def explain_flow(
         feature_importance.items(), key=lambda kv: abs(kv[1]), reverse=True
     )[:10]
 
+    fallback = f"Class {pred_class}"
+    predicted_label = class_names.get(pred_class, fallback) if class_names else fallback
+
     return {
         "edge_idx": edge_idx,
         "src_node": src_node,
         "dst_node": dst_node,
         "predicted_class": pred_class,
+        "predicted_label": predicted_label,
         "confidence": round(confidence, 4),
         "node_feature_importance": {
             "src": src_importance,
@@ -151,6 +162,8 @@ def explain_top_alerts(
     data: Data,
     top_k: int = 5,
     epochs: int = 200,
+    feature_names: list[str] | None = None,
+    class_names: dict[int, str] | None = None,
 ) -> list[dict]:
     """Explain the top-K most confident attack predictions."""
     model.eval()
@@ -171,7 +184,11 @@ def explain_top_alerts(
     for rank, idx in enumerate(top_indices):
         edge_idx = int(attack_indices[idx])
         logger.info("Explaining edge %d (rank %d/%d) ...", edge_idx, rank + 1, top_k)
-        result = explain_flow(model, data, edge_idx, epochs=epochs)
+        result = explain_flow(
+            model, data, edge_idx,
+            epochs=epochs, feature_names=feature_names,
+            class_names=class_names,
+        )
         result["rank"] = rank + 1
         results.append(result)
 

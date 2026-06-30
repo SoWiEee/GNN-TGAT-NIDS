@@ -123,6 +123,7 @@ export interface ExplainResult {
   dst?: number
   timestamp?: number
   predicted_class: number
+  predicted_label?: string
   confidence: number
   top_features: ExplainFeature[]
   node_feature_importance?: { src: number[]; dst: number[] }
