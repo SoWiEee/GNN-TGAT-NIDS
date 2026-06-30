@@ -418,3 +418,45 @@ uv run python scripts/compute_reliability_metrics.py
 | `scripts/tune_hyperparams.py` | Optuna 貝氏超參數搜索 |
 | `scripts/export_onnx.py` | ONNX 匯出 + 選配量化 |
 | `scripts/pcap_to_netflow.py` | PCAP 轉 NetFlow CSV（nfstream）|
+
+---
+
+## 部署設定
+
+### Docker Compose
+
+```bash
+docker compose up --build    # 後端 :8000 + 前端 :80
+```
+
+後端 Dockerfile 已包含 `HEALTHCHECK`，前端等後端 healthy 後才啟動。
+
+### 環境變數
+
+後端（`.env` 或 `docker-compose.yml` environment）：
+
+| 變數 | 預設值 | 說明 |
+|------|--------|------|
+| `ALLOWED_ORIGINS` | `http://localhost:5173` | CORS 允許來源（逗號分隔） |
+| `ENABLE_ATTACK_ENDPOINTS` | `true` | 攻擊端點開關（生產環境設 `false`） |
+| `MAX_CONCURRENT_INFER` | `3` | 最大並發推論數（防止 GPU OOM） |
+| `MAX_CONCURRENT_WS` | `5` | 最大 WebSocket 並發連線數 |
+| `MAX_UPLOAD_BYTES` | `52428800` | 上傳檔案大小上限（bytes） |
+| `ADV_TIMEOUT_SECONDS` | `30.0` | 對抗樣本生成逾時（秒） |
+| `SESSION_TTL_SECONDS` | `3600` | Session 存活時間（秒） |
+| `CLEANUP_INTERVAL_SECONDS` | `300` | Session 清理檢查間隔（秒） |
+
+前端（`.env.local`）：
+
+| 變數 | 預設值 | 說明 |
+|------|--------|------|
+| `VITE_API_BASE_URL` | `http://localhost:8000` | 後端 API 位址 |
+| `VITE_MAX_UPLOAD_BYTES` | `52428800` | 前端上傳檔案大小上限 |
+| `VITE_POLL_INTERVAL_MS` | `2000` | 狀態輪詢間隔（毫秒） |
+
+### CI/CD
+
+GitHub Actions（`.github/workflows/ci.yml`）：
+- **Lint**：ruff check
+- **Test**：CPU PyTorch + pytest（含覆蓋率報告）
+- **Frontend**：vue-tsc 型別檢查 + vite build

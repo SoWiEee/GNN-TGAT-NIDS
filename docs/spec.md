@@ -30,7 +30,7 @@ Research workflow:
 Out of scope for the current implementation:
 
 - Authentication and multi-user authorization.
-- Production deployment hardening beyond local/demo CORS and session cleanup.
+- Production rate limiting (consider `slowapi` or reverse-proxy level limiting).
 - Training through the web UI.
 - ONNX export for temporal models (stateful memory cannot be captured in a single ONNX graph).
 
@@ -490,14 +490,23 @@ uv run python src/data/temporal_builder.py
 Tests:
 
 ```bash
-uv run pytest
+uv run pytest                          # with coverage (configured in pyproject.toml)
+uv run pytest tests/test_api_*.py      # API endpoint tests only
 ```
 
 Frontend build:
 
 ```bash
 cd frontend
-npm run build
+npm ci
+npx vue-tsc --noEmit                   # type check
+npm run build                          # production build
+```
+
+Docker:
+
+```bash
+docker compose up --build              # backend (port 8000) + frontend (port 80)
 ```
 
 ---
@@ -508,9 +517,12 @@ npm run build
 - Offline static training uses 120-second windows, while web inference/explainability/streaming currently default to 60 seconds.
 - C-PGD web comparison builds a minimal single-edge graph with dummy node features. This is useful for reports but not identical to perturbing inside the original full graph context.
 - Temporal models can be loaded for inference when checkpoints are present; explainability uses integrated gradients for temporal models.
-- Web inference loads complete model objects with `torch.load(..., weights_only=False)`, so checkpoints must be trusted.
+- Web inference loads complete model objects via `app/services/torch_load.py` (`weights_only=False`), so checkpoints must be trusted.
 - `scaler.json` is preferred by C-PGD; `scaler.pkl` remains a fallback.
 - Session storage is local filesystem state, not distributed storage.
+- Attack endpoints (`/adversarial`, `/memory-poisoning`) are gated by `ENABLE_ATTACK_ENDPOINTS` (default `true` for dev, set `false` in production).
+- CORS is restricted to explicit methods/headers; origins are configurable via `ALLOWED_ORIGINS`.
+- Inference and WebSocket concurrency are bounded by `MAX_CONCURRENT_INFER` and `MAX_CONCURRENT_WS`.
 
 ---
 

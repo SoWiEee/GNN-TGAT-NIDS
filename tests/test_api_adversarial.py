@@ -78,3 +78,26 @@ def test_adversarial_error_does_not_leak_details():
 
     import shutil
     shutil.rmtree(sdir, ignore_errors=True)
+
+
+def test_adversarial_disabled_when_env_false():
+    with patch("app.routers.adversarial.ENABLE_ATTACK_ENDPOINTS", False):
+        resp = client.post(
+            "/api/adversarial",
+            json={
+                "session_id": "00000000-0000-0000-0000-000000000000",
+                "flow_id": "f0",
+                "epsilon": 0.1,
+                "steps": 10,
+            },
+        )
+    assert resp.status_code == 403
+
+
+def test_memory_poisoning_disabled_when_env_false():
+    with patch("app.routers.memory_poisoning.ENABLE_ATTACK_ENDPOINTS", False):
+        resp = client.post(
+            "/api/memory-poisoning",
+            json={"model": "tgn", "n_poison": 3, "max_batches": 5, "batch_size": 50},
+        )
+    assert resp.status_code == 403
