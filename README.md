@@ -182,7 +182,7 @@ Key findings from Optuna search:
 |----------|-------------|
 | [docs/training.md](docs/training.md) | Training guide, optimization, Optuna search, adversarial training, ONNX export |
 | [docs/model_compare.md](docs/model_compare.md) | Detailed model architecture comparison and experiment results |
-| [docs/architecture-review.md](docs/architecture-review.md) | Architecture review, open issues, risk table |
+| [docs/review.md](docs/review.md) | Project review: security, API, testing improvements |
 | [docs/spec.md](docs/spec.md) | Original project specification |
 
 ---
