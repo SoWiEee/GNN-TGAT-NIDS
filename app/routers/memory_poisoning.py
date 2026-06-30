@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 import torch
@@ -15,15 +16,19 @@ from app.schemas import MemoryPoisoningRequest
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["memory-poisoning"])
 
+ENABLE_ATTACK_ENDPOINTS = os.getenv("ENABLE_ATTACK_ENDPOINTS", "true").lower() == "true"
+
 TEMPORAL_DIR = Path("data/processed/temporal")
 CHECKPOINTS_DIR = Path("checkpoints")
 
 
 def _load_model(name: str):
+    from app.services.torch_load import load_torch_artifact
+
     path = CHECKPOINTS_DIR / f"{name}_best.pt"
     if not path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {path}")
-    model = torch.load(path, map_location="cpu", weights_only=False)
+    model = load_torch_artifact(path)
     model.eval()
     return model
 
@@ -36,8 +41,9 @@ def _sync_run_memory_poisoning(req: MemoryPoisoningRequest) -> dict:
     if not train_path.exists() or not test_path.exists():
         raise FileNotFoundError("Temporal processed data not found")
 
-    train_td = torch.load(train_path, weights_only=False)
-    test_td = torch.load(test_path, weights_only=False)
+    from app.services.torch_load import load_torch_artifact
+    train_td = load_torch_artifact(train_path)
+    test_td = load_torch_artifact(test_path)
     train_loader = TemporalDataLoader(train_td, batch_size=req.batch_size)
     test_loader = TemporalDataLoader(test_td, batch_size=req.batch_size)
 
@@ -129,6 +135,8 @@ def _sync_run_memory_poisoning(req: MemoryPoisoningRequest) -> dict:
 
 @router.post("/memory-poisoning")
 async def run_memory_poisoning(req: MemoryPoisoningRequest):
+    if not ENABLE_ATTACK_ENDPOINTS:
+        raise HTTPException(403, detail="Attack endpoints are disabled in this environment")
     try:
         return await run_in_threadpool(_sync_run_memory_poisoning, req)
     except FileNotFoundError as exc:

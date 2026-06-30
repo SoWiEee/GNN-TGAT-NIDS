@@ -10,7 +10,9 @@ Checkpoint format expected at ``checkpoints/{name}_best.pt``:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -25,6 +27,9 @@ logger = logging.getLogger(__name__)
 
 _models: dict[str, BaseNIDSModel] = {}
 _ensemble: EnsembleModel | None = None
+
+MAX_CONCURRENT_INFER = int(os.getenv("MAX_CONCURRENT_INFER", "3"))
+_infer_semaphore = asyncio.Semaphore(MAX_CONCURRENT_INFER)
 
 CHECKPOINTS_DIR = Path("checkpoints")
 CHECKPOINT_FILES = {
@@ -44,8 +49,8 @@ def _load_single_model(name: str, path: Path) -> BaseNIDSModel | None:
         logger.warning("Checkpoint not found: %s — model '%s' unavailable", path, name)
         return None
     try:
-        # weights_only=False required: we saved the whole model object, not just state_dict.
-        model: BaseNIDSModel = torch.load(path, map_location="cpu", weights_only=False)
+        from app.services.torch_load import load_torch_artifact
+        model: BaseNIDSModel = load_torch_artifact(path)
         model.eval()
         logger.info("Loaded model '%s' from %s", name, path)
         return model
@@ -194,7 +199,8 @@ def _sync_inference_ensemble(csv_path: str) -> dict[str, Any]:
 
 
 async def run_inference(csv_path: str, model_name: str, session_id: UUID) -> dict[str, Any]:
-    """Async wrapper: runs _sync_inference in thread pool."""
-    if model_name == "ensemble":
-        return await run_in_threadpool(_sync_inference_ensemble, csv_path)
-    return await run_in_threadpool(_sync_inference, csv_path, model_name)
+    """Async wrapper: runs _sync_inference in thread pool with concurrency limit."""
+    async with _infer_semaphore:
+        if model_name == "ensemble":
+            return await run_in_threadpool(_sync_inference_ensemble, csv_path)
+        return await run_in_threadpool(_sync_inference, csv_path, model_name)

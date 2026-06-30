@@ -18,6 +18,7 @@ router = APIRouter(tags=["adversarial"])
 
 SESSIONS_DIR = Path("data/sessions")
 ADV_TIMEOUT_SECONDS = float(os.getenv("ADV_TIMEOUT_SECONDS", "30.0"))
+ENABLE_ATTACK_ENDPOINTS = os.getenv("ENABLE_ATTACK_ENDPOINTS", "true").lower() == "true"
 
 
 def _cache_path(session_id: UUID, flow_id: str, epsilon: float, steps: int) -> Path:
@@ -44,6 +45,9 @@ async def generate_adversarial(req: AdversarialRequest):
     Caches result by (flow_id, epsilon, steps) — repeated calls are instant.
     Times out after 30 s; returns null adversarial on failure.
     """
+    if not ENABLE_ATTACK_ENDPOINTS:
+        raise HTTPException(403, detail="Attack endpoints are disabled in this environment")
+
     cache = _cache_path(req.session_id, req.flow_id, req.epsilon, req.steps)
 
     # Return cached result if available

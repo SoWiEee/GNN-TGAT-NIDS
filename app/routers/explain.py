@@ -67,8 +67,8 @@ def _load_session_temporal_data(session_id: UUID):
             detail="Temporal data not available. Run temporal_builder.py first.",
         )
 
-    import torch
-    return torch.load(test_path, weights_only=False)
+    from app.services.torch_load import load_torch_artifact
+    return load_torch_artifact(test_path)
 
 
 def _build_class_names(label2idx: dict[str, int]) -> dict[int, str]:

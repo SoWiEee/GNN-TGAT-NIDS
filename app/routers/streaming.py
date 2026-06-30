@@ -17,6 +17,7 @@ Protocol:
 """
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import json
@@ -34,8 +35,11 @@ router = APIRouter(tags=["streaming"])
 
 DEFAULT_WINDOW_SECONDS = float(os.getenv("WS_DEFAULT_WINDOW_SECONDS", "60.0"))
 MAX_BUFFER_SIZE = int(os.getenv("WS_MAX_BUFFER_SIZE", "10000"))
+MAX_CONCURRENT_WS = int(os.getenv("MAX_CONCURRENT_WS", "5"))
 MIN_WINDOW_SECONDS = 1.0
 MAX_WINDOW_SECONDS = 3600.0
+
+_ws_semaphore = asyncio.Semaphore(MAX_CONCURRENT_WS)
 
 
 class StreamingSession:
@@ -202,56 +206,67 @@ async def websocket_stream(
         await websocket.close(code=1008)
         return
 
-    session = StreamingSession(model, window_seconds)
-    logger.info("Streaming session started: model=%s, window=%.0fs", model, window_seconds)
+    if not _ws_semaphore._value:
+        await websocket.send_json({
+            "type": "error",
+            "message": f"Too many concurrent streams (max {MAX_CONCURRENT_WS})",
+        })
+        await websocket.close(code=1013)
+        return
 
-    try:
-        while True:
-            raw = await websocket.receive_text()
-            try:
-                msg = json.loads(raw)
-            except json.JSONDecodeError:
-                await websocket.send_json({"type": "error", "message": "Invalid JSON"})
-                continue
+    async with _ws_semaphore:
+        session = StreamingSession(model, window_seconds)
+        logger.info("Streaming session started: model=%s, window=%.0fs", model, window_seconds)
 
-            if isinstance(msg, dict) and msg.get("command") == "close":
-                result = session.flush()
-                if result:
-                    await websocket.send_json(result)
-                break
+        try:
+            while True:
+                raw = await websocket.receive_text()
+                try:
+                    msg = json.loads(raw)
+                except json.JSONDecodeError:
+                    await websocket.send_json({"type": "error", "message": "Invalid JSON"})
+                    continue
 
-            if isinstance(msg, dict) and msg.get("command") == "flush":
-                result = session.flush()
-                if result:
-                    await websocket.send_json(result)
-                else:
+                if isinstance(msg, dict) and msg.get("command") == "close":
+                    result = session.flush()
+                    if result:
+                        await websocket.send_json(result)
+                    break
+
+                if isinstance(msg, dict) and msg.get("command") == "flush":
+                    result = session.flush()
+                    if result:
+                        await websocket.send_json(result)
+                    else:
+                        await websocket.send_json({
+                            "type": "ack",
+                            "n_buffered": 0,
+                            "n_processed": session.n_processed,
+                        })
+                    continue
+
+                flows = msg.get("flows", []) if isinstance(msg, dict) else []
+                if not flows:
                     await websocket.send_json({
-                        "type": "ack",
-                        "n_buffered": 0,
-                        "n_processed": session.n_processed,
+                        "type": "error", "message": "No flows in message",
                     })
-                continue
+                    continue
 
-            flows = msg.get("flows", []) if isinstance(msg, dict) else []
-            if not flows:
-                await websocket.send_json({"type": "error", "message": "No flows in message"})
-                continue
+                from fastapi.concurrency import run_in_threadpool
+                results = await run_in_threadpool(session.add_flows, flows)
 
-            from fastapi.concurrency import run_in_threadpool
-            results = await run_in_threadpool(session.add_flows, flows)
+                for result in results:
+                    await websocket.send_json(result)
 
-            for result in results:
-                await websocket.send_json(result)
+                await websocket.send_json({
+                    "type": "ack",
+                    "n_buffered": len(session.buffer),
+                    "n_processed": session.n_processed,
+                })
 
-            await websocket.send_json({
-                "type": "ack",
-                "n_buffered": len(session.buffer),
-                "n_processed": session.n_processed,
-            })
-
-    except WebSocketDisconnect:
-        logger.info("Streaming client disconnected")
-    finally:
-        result = session.flush()
-        if result:
-            logger.info("Final flush: %d alerts", len(result.get("alerts", [])))
+        except WebSocketDisconnect:
+            logger.info("Streaming client disconnected")
+        finally:
+            result = session.flush()
+            if result:
+                logger.info("Final flush: %d alerts", len(result.get("alerts", [])))
