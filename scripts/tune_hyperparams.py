@@ -73,10 +73,11 @@ def _suggest(trial: optuna.Trial, model_name: str) -> dict:
             params["aggregation"] = trial.suggest_categorical("aggregation", ["mean", "max"])
     else:
         params["hidden_dim"] = trial.suggest_categorical("hidden_dim", [64, 128, 172, 256])
-        params["heads"] = trial.suggest_categorical("heads", [1, 2, 4])
         params["n_neighbors"] = trial.suggest_categorical("n_neighbors", [10, 20, 30])
         params["batch_size"] = trial.suggest_categorical("batch_size", [100, 200, 400])
 
+        if model_name == "tgat":
+            params["heads"] = trial.suggest_categorical("heads", [1, 2, 4])
         if model_name == "tgn":
             params["memory_dim"] = trial.suggest_categorical("memory_dim", [64, 100, 128])
 
@@ -124,7 +125,6 @@ def _build_model(model_name: str, params: dict, **kwargs):
         raw_msg_dim=kwargs["n_edge"],
         num_classes=kwargs["n_classes"],
         hidden_dim=params["hidden_dim"],
-        heads=params["heads"],
         num_neighbors=params["n_neighbors"],
         memory_dim=params.get("memory_dim", 100),
     )
@@ -239,15 +239,34 @@ def _objective_static(trial: optuna.Trial, model_name: str, n_epochs: int) -> fl
 
 # ── Objective (temporal) ─────────────────────────────────────────────────────
 
-def _objective_temporal(trial: optuna.Trial, model_name: str, n_epochs: int) -> float:
+def _subsample_temporal(td, ratio: float):
+    """Chronologically subsample a TemporalData object."""
+    if ratio >= 1.0:
+        return td
+    n = int(td.num_events * ratio)
+    from torch_geometric.data import TemporalData
+    return TemporalData(
+        src=td.src[:n], dst=td.dst[:n], t=td.t[:n],
+        msg=td.msg[:n], y=td.y[:n],
+    )
+
+
+def _objective_temporal(
+    trial: optuna.Trial, model_name: str, n_epochs: int,
+    subsample: float = 1.0,
+) -> float:
     params = _suggest(trial, model_name)
 
     with open(TEMPORAL_DIR / "meta.json") as f:
         meta = json.load(f)
 
     from app.services.torch_load import load_torch_artifact
-    train_td = load_torch_artifact(TEMPORAL_DIR / "train.pt")
-    val_td = load_torch_artifact(TEMPORAL_DIR / "val.pt")
+    train_td = _subsample_temporal(
+        load_torch_artifact(TEMPORAL_DIR / "train.pt"), subsample,
+    )
+    val_td = _subsample_temporal(
+        load_torch_artifact(TEMPORAL_DIR / "val.pt"), subsample,
+    )
 
     bs = params["batch_size"]
     train_loader = TemporalDataLoader(train_td, batch_size=bs)
@@ -325,6 +344,8 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=30,
                         help="Epochs per trial (shorter = faster search)")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--subsample", type=float, default=1.0,
+                        help="Temporal data subsample ratio (0-1). Use 0.2 for faster search.")
     args = parser.parse_args()
 
     set_global_seed(args.seed)
@@ -346,9 +367,14 @@ def main() -> None:
     print(f"  dashboard: uv run optuna-dashboard sqlite:///{db_path}")
     print()
 
+    if args.subsample < 1.0 and args.model in TEMPORAL_MODELS:
+        print(f"  subsample: {args.subsample:.0%} of temporal data")
+
     def objective(trial: optuna.Trial) -> float:
         if args.model in TEMPORAL_MODELS:
-            return _objective_temporal(trial, args.model, args.epochs)
+            return _objective_temporal(
+                trial, args.model, args.epochs, subsample=args.subsample,
+            )
         return _objective_static(trial, args.model, args.epochs)
 
     study.optimize(objective, n_trials=args.trials, show_progress_bar=True)

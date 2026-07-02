@@ -505,7 +505,7 @@
       {
         "class_id": 4,
         "name": "Exploits",
-        "precision": 0.6403,
+        "precision": 0.6404,
         "recall": 0.4297,
         "f1": 0.5143,
         "support": 12849
@@ -513,9 +513,9 @@
       {
         "class_id": 5,
         "name": "Fuzzers",
-        "precision": 0.2999,
+        "precision": 0.2998,
         "recall": 0.5896,
-        "f1": 0.3976,
+        "f1": 0.3975,
         "support": 6711
       },
       {
@@ -529,15 +529,15 @@
       {
         "class_id": 7,
         "name": "Reconnaissance",
-        "precision": 0.182,
-        "recall": 0.8127,
-        "f1": 0.2974,
+        "precision": 0.1819,
+        "recall": 0.8125,
+        "f1": 0.2973,
         "support": 4064
       },
       {
         "class_id": 8,
         "name": "Shellcode",
-        "precision": 0.1116,
+        "precision": 0.1115,
         "recall": 0.4523,
         "f1": 0.179,
         "support": 440
@@ -557,8 +557,8 @@
         511,
         0,
         13,
-        1441,
-        6045,
+        1439,
+        6047,
         99,
         3061,
         103,
@@ -644,8 +644,8 @@
         8,
         147,
         21,
-        3303,
-        519,
+        3302,
+        520,
         0
       ],
       [
@@ -685,7 +685,7 @@
       "Shellcode",
       "Worms"
     ],
-    "dr_under_cpgd_eps01": 0.998,
+    "dr_under_cpgd_eps01": 0.9979,
     "dr_under_cpgd_eps01_sampled": false,
     "cpgd_epsilon": 0.1,
     "cpgd_steps": 40,
@@ -693,7 +693,7 @@
     "cpgd_attack_edges": 110352,
     "cpgd_scope": "full_test",
     "cpgd_constraint": "normalized_clip_and_linf",
-    "delta_f1_after_adv_training": null
+    "delta_f1_after_adv_training": -0.0537
   },
   "tgn": {
     "clean_f1": 0.9463,
@@ -917,7 +917,7 @@
       "Shellcode",
       "Worms"
     ],
-    "dr_under_cpgd_eps01": 0.9966,
+    "dr_under_cpgd_eps01": 0.9965,
     "dr_under_cpgd_eps01_sampled": false,
     "cpgd_epsilon": 0.1,
     "cpgd_steps": 40,
@@ -925,7 +925,7 @@
     "cpgd_attack_edges": 110491,
     "cpgd_scope": "full_test",
     "cpgd_constraint": "normalized_clip_and_linf",
-    "delta_f1_after_adv_training": null
+    "delta_f1_after_adv_training": -0.0181
   },
   "ensemble": {
     "clean_f1": 0.9767,

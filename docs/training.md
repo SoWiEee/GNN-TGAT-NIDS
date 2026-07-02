@@ -179,6 +179,10 @@ uv run python train.py model=graphsage \
 | GraphSAGE | 基線（`inverse`, γ=2.0, val=f1） | 0.1063 | 0.1645 | 0.0639 |
 | GraphSAGE | Optuna 最佳（`sqrt_inverse`, γ=1.0, oversample=20） | **0.9773** | **0.5735** | **0.9742** |
 | GAT | Optuna 最佳（`sqrt_inverse`, γ=1.0, oversample=3） | 0.9585 | 0.4036 | 0.9526 |
+| TGAT | Optuna 最佳（`effective`, γ=1.0, hidden=256, heads=4） | 0.9475 | 0.3643 | 0.9391 |
+| TGN | Optuna 最佳（`effective`, γ=1.0, hidden=256, memory=100） | 0.9463 | 0.3438 | 0.9351 |
+| TGAT | Optuna + 對抗式訓練（ε=0.1, ratio=0.3） | 0.8916 | 0.1904 | 0.8662 |
+| TGN | Optuna + 對抗式訓練（ε=0.1, ratio=0.3） | 0.9285 | 0.2824 | 0.9053 |
 
 ### 每類別 F1（GraphSAGE，Optuna 最佳設定）
 
@@ -196,11 +200,13 @@ uv run python train.py model=graphsage \
 | Analysis | 239 | 0.1226 | 0.4310 | 0.1909 |
 
 **關鍵發現：**
-- `sqrt_inverse` 類別權重一致優於 `inverse` 和 `effective`
+- 靜態模型偏好 `sqrt_inverse` 類別權重；時序模型偏好 `effective`
 - 高 `oversample_factor`（9-20）對稀有類別的 recall 至關重要
-- 較低的 `focal_gamma`（1.0）比預設的 2.0 效果更好
+- 較低的 `focal_gamma`（1.0）比預設的 2.0 效果更好，四個模型一致
 - GraphSAGE 淺層（2 層）優於較深的 3-4 層架構；GAT 則 3 層表現較好
+- 時序模型最佳 `hidden_dim=256`，`n_neighbors=20-30`
 - 混淆主要在攻擊子類型之間（DoS↔Exploits、Generic↔DoS/Exploits），非 benign vs attack
+- TGN 的 GRU-based memory 在對抗訓練下比 TGAT 更穩定（ΔF1=-0.0181 vs -0.0537）
 
 ### GAT Optuna 最佳超參數
 
@@ -216,6 +222,43 @@ uv run python train.py model=gat \
 
 GAT 與 GraphSAGE 的差異：較深的網路（3 層 vs 2 層）、更高的 dropout（0.4 vs 0.0）、較低的 oversample_factor（3 vs 20）。GAT 的多頭注意力機制提供隱式正則化，降低了對過取樣的依賴。
 
+### TGAT Optuna 最佳超參數
+
+Best trial（macro_f1=0.1917 on validation, 15 trials × 15 epochs, 20% subsample）：
+
+```bash
+uv run python train.py model=tgat data=temporal_default \
+    train.lr=0.0042 train.focal_gamma=1.0 train.oversample_factor=13 \
+    train.class_weight_strategy=effective train.val_metric=macro_f1 \
+    train.scheduler=cosine train.patience=15 \
+    model.hidden_dim=256 model.heads=4 model.n_neighbors=20
+```
+
+### TGN Optuna 最佳超參數
+
+Best trial（macro_f1=0.1883 on validation, 15 trials × 15 epochs, 20% subsample）：
+
+```bash
+uv run python train.py model=tgn data=temporal_default \
+    train.lr=0.0027 train.focal_gamma=1.0 train.oversample_factor=12 \
+    train.class_weight_strategy=effective train.val_metric=macro_f1 \
+    train.scheduler=cosine train.patience=15 \
+    model.hidden_dim=256 model.num_neighbors=30 model.memory_dim=100
+```
+
+時序模型 Optuna 使用 20% 資料子集進行搜索以加速（1.5M → 300K 事件），相對排名仍有效。完整資料訓練後 TGAT 測試 macro_f1=0.3643、TGN 測試 macro_f1=0.3438。
+
+### 時序模型對抗式訓練結果
+
+使用 Optuna 最佳參數 + C-PGD 對抗式訓練（ε=0.1, 10 步, ratio=0.3, 50 epochs）：
+
+| 模型 | Clean F1 | Adv F1 | ΔF1 | Adv Macro F1 | Adv ROC-AUC |
+|------|:--------:|:------:|:---:|:------------:|:-----------:|
+| TGAT | 0.9475 | 0.8938 | -0.0537 | 0.1904 | 0.9686 |
+| TGN | 0.9463 | 0.9282 | -0.0181 | 0.2824 | 0.9941 |
+
+TGN 在對抗訓練下表現遠優於 TGAT：ΔF1 僅 -0.0181（vs -0.0537），且 macro_f1 高出 48%（0.2824 vs 0.1904）。TGN 的 GRU-based memory 提供更穩定的時序表示，對抗擾動較難破壞已累積的記憶狀態。
+
 ---
 
 ## 超參數搜索（Optuna）
@@ -227,9 +270,9 @@ uv sync --group dev
 uv run python scripts/tune_hyperparams.py --model graphsage --trials 50
 uv run python scripts/tune_hyperparams.py --model gat --trials 50
 
-# 時序模型
-uv run python scripts/tune_hyperparams.py --model tgat --trials 30
-uv run python scripts/tune_hyperparams.py --model tgn --trials 30
+# 時序模型（使用 20% 子集加速搜索）
+uv run python scripts/tune_hyperparams.py --model tgat --trials 15 --epochs 15 --subsample 0.2
+uv run python scripts/tune_hyperparams.py --model tgn --trials 15 --epochs 15 --subsample 0.2
 
 # 即時儀表板
 uv run optuna-dashboard sqlite:///results/optuna.db
@@ -260,7 +303,7 @@ uv run optuna-dashboard sqlite:///results/optuna.db
 |---|---|
 | `lr` | 1e-4 ~ 1e-2（對數尺度）|
 | `hidden_dim` | 64 / 128 / 172 / 256 |
-| `heads` | 1 / 2 / 4 |
+| `heads`（TGAT）| 1 / 2 / 4 |
 | `n_neighbors` | 10 / 20 / 30 |
 | `batch_size` | 100 / 200 / 400 |
 | `memory_dim`（TGN）| 64 / 100 / 128 |
@@ -291,6 +334,21 @@ uv run python train.py model=graphsage train.adversarial_training=true \
 
 uv run python train.py model=gat train.adversarial_training=true \
     train.adv_epsilon=0.1 train.adv_steps=10 train.adv_ratio=0.3
+
+# 時序模型對抗式訓練（搭配 Optuna 最佳參數）
+uv run python train.py model=tgat data=temporal_default \
+    train.lr=0.0042 train.focal_gamma=1.0 \
+    train.class_weight_strategy=effective train.val_metric=macro_f1 \
+    train.scheduler=cosine train.patience=15 train.epochs=50 \
+    train.adversarial_training=true train.adv_epsilon=0.1 train.adv_steps=10 train.adv_ratio=0.3 \
+    model.hidden_dim=256 model.heads=4 model.n_neighbors=20
+
+uv run python train.py model=tgn data=temporal_default \
+    train.lr=0.0027 train.focal_gamma=1.0 \
+    train.class_weight_strategy=effective train.val_metric=macro_f1 \
+    train.scheduler=cosine train.patience=15 train.epochs=50 \
+    train.adversarial_training=true train.adv_epsilon=0.1 train.adv_steps=10 train.adv_ratio=0.3 \
+    model.hidden_dim=256 model.num_neighbors=30 model.memory_dim=100
 ```
 
 儲存為 `{model}_adv_best.pt`。`compute_reliability_metrics.py` 會自動載入 `_adv_best.pt` 檔案。

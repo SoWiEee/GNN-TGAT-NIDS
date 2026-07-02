@@ -102,7 +102,7 @@ flowchart LR
 
 ### 整體表現
 
-靜態模型在 NF-UNSW-NB15-v2 測試集（~397K flows, 3312 windows）上評估；時序模型在 508K 事件上評估。靜態模型超參數由 Optuna（TPE sampler + MedianPruner）搜索。
+靜態模型在 NF-UNSW-NB15-v2 測試集（~397K flows, 3312 windows）上評估；時序模型在 508K 事件上評估。所有模型超參數由 Optuna（TPE sampler + MedianPruner）搜索。
 
 | 指標 | GraphSAGE | GAT | TGAT | TGN | Ensemble |
 |------|:---------:|:---:|:----:|:---:|:--------:|
@@ -111,13 +111,24 @@ flowchart LR
 | Precision | 0.9818 | 0.9686 | 0.9632 | 0.9610 | 0.9819 |
 | Recall | 0.9742 | 0.9526 | 0.9391 | 0.9351 | 0.9735 |
 | ROC-AUC | 0.9974 | 0.9932 | 0.9963 | 0.9960 | 0.9970 |
-| C-PGD DR (ε=0.1) | 1.0000 | 1.0000 | 0.9980 | 0.9966 | — |
+| C-PGD DR (ε=0.1) | 1.0000 | 1.0000 | 0.9979 | 0.9965 | — |
 
 > Ensemble 使用 GraphSAGE + GAT 加權軟投票（權重 0.50 / 0.50），在驗證集自動學習。
 
 ### 對抗魯棒性
 
 所有模型在 C-PGD 攻擊（ε=0.1, 40 步）下維持 ≥99.6% 的偵測率，顯示 FocalLoss + 約束集的防禦策略有效。
+
+### 對抗式訓練（Adversarial Training）
+
+時序模型使用 C-PGD 對抗式訓練（ε=0.1, 10 步, ratio=0.3）重新訓練後：
+
+| 模型 | Clean F1 | Adv F1 | ΔF1 | 說明 |
+|------|:--------:|:------:|:---:|------|
+| TGAT | 0.9475 | 0.8938 | -0.0537 | 對抗訓練後 macro_f1=0.1904, ROC-AUC=0.9686 |
+| TGN | 0.9463 | 0.9282 | -0.0181 | 對抗訓練後 macro_f1=0.2824, ROC-AUC=0.9941 |
+
+> TGN 的 GRU-based memory 機制在對抗訓練下比 TGAT 的 stateless attention 更穩定（ΔF1 僅 -0.0181 vs -0.0537），且 ROC-AUC 維持 0.9941。
 
 ### Optuna 最佳超參數
 
@@ -141,11 +152,32 @@ uv run python train.py model=gat \
     model.hidden_dim=128 model.num_layers=3 model.dropout=0.4 model.num_heads=4
 ```
 
+**TGAT**（15 trials × 15 epochs, 20% subsample, macro_f1=0.1917 on validation）：
+
+```bash
+uv run python train.py model=tgat data=temporal_default \
+    train.lr=0.0042 train.focal_gamma=1.0 train.oversample_factor=13 \
+    train.class_weight_strategy=effective train.val_metric=macro_f1 \
+    train.scheduler=cosine train.patience=15 \
+    model.hidden_dim=256 model.heads=4 model.n_neighbors=20
+```
+
+**TGN**（15 trials × 15 epochs, 20% subsample, macro_f1=0.1883 on validation）：
+
+```bash
+uv run python train.py model=tgn data=temporal_default \
+    train.lr=0.0027 train.focal_gamma=1.0 train.oversample_factor=12 \
+    train.class_weight_strategy=effective train.val_metric=macro_f1 \
+    train.scheduler=cosine train.patience=15 \
+    model.hidden_dim=256 model.num_neighbors=30 model.memory_dim=100
+```
+
 Optuna 搜索發現：
-- `sqrt_inverse` 類別權重一致優於 `inverse` 和 `effective`
+- 靜態模型偏好 `sqrt_inverse` 類別權重；時序模型偏好 `effective`
 - 高 `oversample_factor`（9-20）對稀有類別的召回率至關重要
-- 較低的 `focal_gamma`（1.0）優於預設的 2.0
+- 較低的 `focal_gamma`（1.0）優於預設的 2.0，四個模型一致
 - GraphSAGE 淺層（2 層）優於深層；GAT 則 3 層表現較好
+- 時序模型最佳 `hidden_dim=256`，`n_neighbors=20-30`
 
 ### Per-Class F1 分解
 
