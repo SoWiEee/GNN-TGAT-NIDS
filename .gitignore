@@ -16,6 +16,7 @@ CLAUDE.md
 .codex/
 .agents/
 screenshots/
+!docs/screenshots/
 .playwright-mcp/
 
 # Byte-compiled / optimized / DLL files

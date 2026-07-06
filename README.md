@@ -66,6 +66,37 @@ docker compose exec backend uv run python train.py model=graphsage
 | **即時串流推論** | 透過 WebSocket 即時分析 NetFlow 流量 |
 | **記憶體投毒攻擊** | TGN 專用的記憶體投毒對抗測試 |
 
+### 介面截圖
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/alert-list.png" alt="告警列表" /><br />
+      <b>告警列表</b> — 逐筆流量的攻擊分類與信心值
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/attack-timeline.png" alt="攻擊時間線" /><br />
+      <b>攻擊時間線</b> — 依時間視窗的攻擊類型分佈
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="docs/screenshots/reliability-panel.png" alt="模型可靠度面板" /><br />
+      <b>模型可靠度</b> — Clean F1、C-PGD 偵測率、對抗訓練 ΔF1
+    </td>
+    <td align="center">
+      <img src="docs/screenshots/traffic-graph.png" alt="流量拓撲圖" /><br />
+      <b>流量拓撲圖</b> — IP 節點與流量邊的互動視覺化
+    </td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <img src="docs/screenshots/explainability.png" alt="可解釋性分析" width="70%" /><br />
+      <b>可解釋性</b> — GNNExplainer 特徵重要度分析，顯示每筆攻擊流量的關鍵決策特徵
+    </td>
+  </tr>
+</table>
+
 ---
 
 ## 系統架構
