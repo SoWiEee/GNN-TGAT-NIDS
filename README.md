@@ -1,6 +1,6 @@
 # GNN-TGAT-NIDS
 
-**Upload NetFlow traffic → Detect intrusions with GNN → Visualize, alert, and report**
+**上傳 NetFlow 流量 → GNN 圖神經網路偵測入侵 → 互動視覺化、告警與安全報告**
 
 [![Python](https://img.shields.io/badge/Python-3.12%2B-blue.svg)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.4%2B-orange.svg)](https://pytorch.org/)
@@ -8,97 +8,98 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688.svg)](https://fastapi.tiangolo.com/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> An interactive web-based Network Intrusion Detection System powered by Graph Neural Networks.
-> Upload a NetFlow CSV, explore the traffic graph, review alerts, and export a full security report — including adversarial robustness analysis.
+> 以圖神經網路驅動的互動式網路入侵偵測系統。
+> 上傳 NetFlow CSV，探索流量拓撲圖、檢視告警、取得完整安全報告——包含對抗魯棒性分析。
 
 ---
 
-## Quick Start
+## 快速開始
 
-Requires [Docker](https://docs.docker.com/get-docker/) and the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html).
+需要 [Docker](https://docs.docker.com/get-docker/) 與 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)。
 
 ```bash
 git clone https://github.com/SoWiEee/GNN-TGAT-NIDS.git
 cd GNN-TGAT-NIDS
 
-# Place trained checkpoints in checkpoints/ (or train inside the container)
-# Place dataset CSV in data/raw/ (or use the included demo)
+# 將已訓練的模型權重放到 checkpoints/（或在容器內訓練）
+# 將資料集 CSV 放到 data/raw/（或使用內建 demo）
 
 docker compose up --build
 ```
 
-| Service | URL |
-|---------|-----|
-| Frontend | http://localhost |
-| Backend API | http://localhost:8000 |
-| API via nginx | http://localhost/api/* |
+| 服務 | 網址 |
+|------|------|
+| 前端介面 | http://localhost |
+| 後端 API | http://localhost:8000 |
+| API（透過 nginx） | http://localhost/api/* |
 
-**Volume mounts** (host → container):
+**掛載目錄**（主機 → 容器）：
 
-| Host path | Container path | Purpose |
-|-----------|---------------|---------|
-| `checkpoints/` | `/app/checkpoints` | Model weights |
-| `data/raw/` | `/app/data/raw` | Upload datasets |
-| `data/processed/` | `/app/data/processed` | Built graphs |
-| `data/metrics/` | `/app/data/metrics` | Reliability panel |
-| `data/sessions/` | `/app/data/sessions` | Analysis sessions |
+| 主機路徑 | 容器路徑 | 用途 |
+|----------|----------|------|
+| `checkpoints/` | `/app/checkpoints` | 模型權重 |
+| `data/raw/` | `/app/data/raw` | 上傳資料集 |
+| `data/processed/` | `/app/data/processed` | 建構後的圖 |
+| `data/metrics/` | `/app/data/metrics` | 模型可靠度面板 |
+| `data/sessions/` | `/app/data/sessions` | 分析工作階段 |
 
-**Train inside Docker:**
+**在 Docker 內訓練：**
 
 ```bash
 docker compose exec backend uv run python train.py model=graphsage
 ```
 
-> For local development without Docker, training details, hyperparameter search, and ONNX export, see [docs/training.md](docs/training.md).
+> 本機開發、訓練細節、超參數搜索與 ONNX 匯出，請參考 [docs/training.md](docs/training.md)。
 
 ---
 
-## Features
+## 功能特色
 
-| Feature | Description |
-|---------|-------------|
-| **Interactive Traffic Graph** | IP nodes + flow edges coloured by risk level (Cytoscape.js) |
-| **Alert List** | Per-flow alerts with attack type, confidence, and top features |
-| **Attack Timeline** | Stacked time-series of attack-type distribution (Plotly.js) |
-| **Model Reliability Panel** | Pre-computed clean F1, adversarial DR, and ΔF1 after adversarial training |
-| **Adversarial Comparison** | Side-by-side original vs. perturbed flows with constraint validation. PDF/HTML export |
-| **Explainability** | GNNExplainer (static) + integrated gradients (temporal) with feature importance bars |
-| **Streaming Inference** | Real-time NetFlow analysis via WebSocket |
+| 功能 | 說明 |
+|------|------|
+| **互動式流量拓撲圖** | IP 節點 + 流量邊，依風險等級上色（Cytoscape.js） |
+| **告警列表** | 逐筆流量告警，附攻擊類型、信心值與關鍵特徵 |
+| **攻擊時間線** | 攻擊類型堆疊時序分佈圖（Plotly.js） |
+| **模型可靠度面板** | 預計算的 Clean F1、對抗偵測率、對抗式訓練 ΔF1 |
+| **對抗比較報告** | 原始 vs. 擾動流量的並排比較，含約束驗證，支援 PDF/HTML 匯出 |
+| **可解釋性** | GNNExplainer（靜態模型）+ 積分梯度（時序模型），特徵重要度長條圖 |
+| **即時串流推論** | 透過 WebSocket 即時分析 NetFlow 流量 |
+| **記憶體投毒攻擊** | TGN 專用的記憶體投毒對抗測試 |
 
 ---
 
-## Architecture
+## 系統架構
 
 ```mermaid
 flowchart LR
-    subgraph Input
-        CSV["NetFlow CSV\n(NF-UNSW-NB15-v2\nor custom upload)"]
+    subgraph 輸入
+        CSV["NetFlow CSV\n（NF-UNSW-NB15-v2\n或自訂上傳）"]
     end
 
-    subgraph Backend["Backend — FastAPI"]
-        SB["Static Graph Builder\n300 s tumbling windows"]
-        GNN["GNN Inference\nGraphSAGE / GAT / E-GraphSAGE\nTGAT / TGN"]
-        ADV["Adversarial Module\nC-PGD / Edge Injection / GAN"]
-        RPT["Report Generator\nJinja2 → PDF / HTML"]
+    subgraph 後端["後端 — FastAPI"]
+        SB["靜態圖建構器\n300 秒滑動視窗"]
+        GNN["GNN 推論\nGraphSAGE / GAT\nTGAT / TGN"]
+        ADV["對抗模組\nC-PGD / 邊注入 / GAN"]
+        RPT["報告產生器\nJinja2 → PDF / HTML"]
     end
 
-    subgraph Frontend["Frontend — Vue 3 + Vite"]
-        VIZ["Traffic Graph\nCytoscape.js"]
-        ALT["Alert List +\nExplainability"]
-        TSC["Attack Timeline\nPlotly.js"]
-        MRP["Model Reliability\nPanel"]
-        ACP["Adversarial\nComparison Report"]
+    subgraph 前端["前端 — Vue 3 + Vite"]
+        VIZ["流量拓撲圖\nCytoscape.js"]
+        ALT["告警列表 +\n可解釋性"]
+        TSC["攻擊時間線\nPlotly.js"]
+        MRP["模型可靠度\n面板"]
+        ACP["對抗\n比較報告"]
     end
 
     CSV --> SB --> GNN --> VIZ & ALT & TSC
     GNN --> ADV --> ACP
     ACP --> RPT
-    MRP -.->|pre-computed metrics| MRP
+    MRP -.->|預計算指標| MRP
 ```
 
 ---
 
-## Model Performance
+## 模型效能
 
 ### 整體表現
 
@@ -215,95 +216,98 @@ Optuna 搜索發現：
 
 ---
 
-## Tech Stack
+## 技術架構
 
-| Layer | Technology |
-|-------|-----------|
-| ML | PyTorch 2.4 + PyTorch Geometric 2.6 |
-| Models | GraphSAGE, GAT, E-GraphSAGE, TGAT, TGN |
-| Backend | FastAPI + uvicorn |
-| Frontend | Vue 3 + Vite + TypeScript + Pinia |
-| Visualization | Cytoscape.js, Plotly.js |
-| Reports | Jinja2 + WeasyPrint |
-| Config | Hydra |
-| Deploy | Docker + NVIDIA Container Toolkit |
-
----
-
-## Dataset
-
-- **NF-UNSW-NB15-v2** (~2.5M flows, 9 attack types + Benign). Place at `data/raw/NF-UNSW-NB15-v2.csv`. Source: [UNSW Sydney](https://research.unsw.edu.au/projects/unsw-nb15-dataset).
-- **Demo**: `data/demo/demo_flows.csv` — 1000-flow curated subset (tracked in git).
+| 層級 | 技術 |
+|------|------|
+| 機器學習 | PyTorch 2.4 + PyTorch Geometric 2.6 |
+| 偵測模型 | GraphSAGE, GAT, E-GraphSAGE, TGAT, TGN |
+| 對抗攻擊 | C-PGD, 邊注入, GAN, 記憶體投毒 |
+| 後端 API | FastAPI + uvicorn |
+| 前端 | Vue 3 + Vite + TypeScript + Pinia |
+| 視覺化 | Cytoscape.js, Plotly.js |
+| 報告產生 | Jinja2 + WeasyPrint |
+| 組態管理 | Hydra |
+| 部署 | Docker + NVIDIA Container Toolkit |
+| CI | GitHub Actions（ruff lint + pytest + 前端 type-check） |
 
 ---
 
-## Documentation
+## 資料集
 
-| Document | Description |
-|----------|-------------|
-| [docs/training.md](docs/training.md) | Training guide, optimization, Optuna search, adversarial training, ONNX export |
-| [docs/model_compare.md](docs/model_compare.md) | Detailed model architecture comparison and experiment results |
-| [docs/review.md](docs/review.md) | Project review: security, API, testing improvements |
-| [docs/spec.md](docs/spec.md) | Original project specification |
+- **NF-UNSW-NB15-v2** — 約 250 萬筆流量，9 種攻擊類型 + Benign。放置於 `data/raw/NF-UNSW-NB15-v2.csv`。來源：[UNSW Sydney](https://research.unsw.edu.au/projects/unsw-nb15-dataset)。
+- **Demo** — `data/demo/demo_flows.csv`，1000 筆分層抽樣子集（已納入版本控制）。
 
 ---
 
-## Project Structure
+## 文件
+
+| 文件 | 說明 |
+|------|------|
+| [docs/training.md](docs/training.md) | 訓練指南：優化策略、Optuna 搜索、對抗式訓練、ONNX 匯出 |
+| [docs/model_compare.md](docs/model_compare.md) | 模型架構比較與實驗結果 |
+| [docs/review.md](docs/review.md) | 專案審查：安全性、API、測試改善 |
+| [docs/spec.md](docs/spec.md) | 原始專案規格書 |
+
+---
+
+## 專案結構
 
 ```
-├── src/                        # ML core
-│   ├── data/                   # Data pipeline (loader, builder, dataset)
+├── src/                        # ML 核心
+│   ├── data/                   # 資料管線（loader, builder, dataset）
 │   ├── models/                 # GraphSAGE, GAT, E-GraphSAGE, TGAT, TGN, Ensemble
-│   ├── attack/                 # C-PGD, Edge Injection, GAN, Memory Poisoning
-│   ├── defense/                # Adversarial training
-│   ├── explain/                # GNNExplainer + temporal gradient attribution
+│   ├── attack/                 # C-PGD, 邊注入, GAN, 記憶體投毒, 時序 C-PGD
+│   ├── defense/                # 對抗式訓練
+│   ├── explain/                # GNNExplainer + 時序梯度歸因
 │   └── utils/
-├── app/                        # FastAPI backend
+├── app/                        # FastAPI 後端
 │   ├── routers/                # analyze, adversarial, report, streaming, explain
 │   ├── services/               # inference, graph_builder, report_builder
 │   └── templates/
 ├── frontend/                   # Vue 3 + Vite
 │   └── src/views/              # TrafficGraph, AlertList, Timeline, Reliability, Adversarial, Explain
-├── scripts/                    # Training, evaluation, export utilities
-├── configs/                    # Hydra configs (model, data, attack, train)
+├── scripts/                    # 訓練、評估、匯出工具
+├── configs/                    # Hydra 組態（model, data, attack, train）
 ├── data/
-│   ├── demo/                   # Demo dataset (tracked)
-│   └── metrics/                # Pre-computed reliability.json
-├── Dockerfile                  # Backend (PyTorch + CUDA 12.4)
-├── frontend/Dockerfile         # Frontend (nginx)
-├── docker-compose.yml          # GPU-enabled full stack
+│   ├── demo/                   # Demo 資料集（已納入版本控制）
+│   └── metrics/                # 預計算的 reliability.json
+├── Dockerfile                  # 後端（PyTorch + CUDA 12.4）
+├── frontend/Dockerfile         # 前端（nginx）
+├── docker-compose.yml          # GPU 加速的全端部署
 └── pyproject.toml
 ```
 
 ---
 
-## Future Work
+## 未來工作
 
-- **Cross-dataset feature alignment** — Adapters for datasets with different feature schemas (e.g. CIC-IDS-2017, ToN-IoT)
-- **E-GraphSAGE / temporal adversarial training** — Edge-feature-aware and temporal adversarial robustness (framework ready, not yet trained)
-- **Lightweight temporal models** — GraphMixer / SimpleDyG as faster alternatives to TGAT/TGN
+- **跨資料集特徵對齊** — 適配不同特徵結構的資料集（如 CIC-IDS-2017, ToN-IoT）
+- **靜態模型對抗式訓練** — GraphSAGE/GAT 的 C-PGD 對抗式訓練（框架已就緒，尚未正式訓練）
+- **輕量化時序模型** — GraphMixer / SimpleDyG 作為 TGAT/TGN 的快速替代方案
+- **E-GraphSAGE 完整評估** — 邊特徵感知模型的完整 Optuna 調參與對抗魯棒性測試
 
 ---
 
-## References
+## 參考文獻
 
-**GNN Models**
+**GNN 模型**
 - Hamilton et al. "Inductive Representation Learning on Large Graphs." *NeurIPS 2017.* — GraphSAGE
 - Velickovic et al. "Graph Attention Networks." *ICLR 2018.* — GAT
 - Xu et al. "Inductive Representation Learning on Temporal Graphs." *ICLR 2020.* — TGAT
 - Rossi et al. "Temporal Graph Networks for Deep Learning on Dynamic Graphs." *arXiv 2020.* — TGN
 
-**GNN-based NIDS**
+**GNN 入侵偵測**
 - Lo et al. "E-GraphSAGE: A GNN-based IDS for IoT." *IEEE NOMS 2022.*
 - Bilot et al. "Graph Neural Networks for Intrusion Detection: A Survey." *IEEE Access 2023.*
 
-**Adversarial Attacks on NIDS**
+**對抗攻擊**
 - Han et al. "Practical Traffic-Space Adversarial Attacks on Learning-Based NIDSs." *USENIX Security 2021.*
 - Pierazzi et al. "Intriguing Properties of Adversarial ML Attacks in the Problem Space." *IEEE S&P 2020.*
 - Madry et al. "Towards Deep Learning Models Resistant to Adversarial Attacks." *ICLR 2018.* — PGD
 
 ---
 
-## License
+## 授權條款
 
-MIT License. See [LICENSE](LICENSE).
+MIT License。詳見 [LICENSE](LICENSE)。
