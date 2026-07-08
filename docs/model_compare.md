@@ -1,286 +1,325 @@
-# Model Selection: GNN Architecture Comparison for NIDS
+# 模型選型：GNN 架構於 NIDS 之比較
 
-**Version:** 1.2  
-**Date:** 2026-06-16  
-**Scope:** Current experimental comparison for GraphSAGE, GAT, E-GraphSAGE, TGAT, TGN, and adversarial training.
-
----
-
-## 1. Research Question
-
-The project compares static GNNs and temporal GNNs for NetFlow-based intrusion detection:
-
-> Do temporal graph models (TGAT, TGN) provide better detection robustness or generalization than static graph models (GraphSAGE, GAT) when traffic is represented as graph-structured flow data?
-
-The current implementation supports three comparison groups:
-
-| Family | Models | Role |
-|---|---|---|
-| Static baselines | GraphSAGE, GAT | Fast training/inference and web-demo primary models |
-| Edge-feature-aware | E-GraphSAGE | Edge features in message passing; NIDS-tailored |
-| Temporal models | TGAT, TGN | Main research targets for continuous-time graph behavior |
-| Static ensemble | GraphSAGE + GAT + E-GraphSAGE | Optional API inference mode through soft/weighted voting |
+**版本：** 2.0
+**日期：** 2026-07-07
+**範圍：** GraphSAGE、GAT、TGAT、TGN 在 NF-UNSW-NB15-v2 上的完整實驗比較，含 Optuna 超參數搜索與對抗式訓練。
 
 ---
 
-## 2. Current Experiment Summary
+## 1. 研究問題
 
-Latest results were found in `data/metrics/reliability.json` and Hydra training logs under `outputs/2026-06-14`, `outputs/2026-06-15`, and `outputs/2026-06-16`.
+本專案比較靜態與時序圖神經網路在 NetFlow 入侵偵測上的表現：
 
-| Model | Test F1 | Precision | Recall | ROC-AUC | Macro F1 | Source |
-|---|---:|---:|---:|---:|---:|---|
-| GraphSAGE | 0.9712 | 0.9792 | 0.9660 | 0.9992 | 0.4657 | `outputs/2026-06-15/16-38-10/train.log` |
-| GAT | 0.9534 | 0.9729 | 0.9433 | 0.9963 | 0.3164 | `data/metrics/reliability.json` |
-| E-GraphSAGE | 0.9708 | 0.9784 | 0.9665 | 0.9991 | 0.4681 | `outputs/2026-06-16` |
-| TGAT | 0.9475 | 0.9632 | 0.9391 | 0.9963 | 0.3643 | `outputs/2026-06-14/18-15-58/train.log` |
-| TGN | 0.9463 | 0.9610 | 0.9351 | 0.9960 | 0.3438 | `data/metrics/reliability.json` |
-| Ensemble (3-model) | 0.9700 | 0.9794 | 0.9650 | 0.9992 | 0.4510 | `data/metrics/reliability.json` |
-| GraphSAGE + adversarial training | 0.9753 | 0.9803 | 0.9727 | 0.9997 | — | `outputs/2026-06-15/19-50-40/train.log` |
-| GAT + adversarial training | 0.9622 | 0.9696 | 0.9581 | 0.9965 | — | `outputs/2026-06-15/19-59-32/train.log` |
+> 時序圖模型（TGAT、TGN）在流量以圖結構表示時，是否能提供比靜態圖模型（GraphSAGE、GAT）更好的偵測魯棒性或泛化能力？
 
-Reliability file values:
+目前實作支援以下比較組：
 
-| Model | Clean F1 | DR under C-PGD eps=0.1 | Scope | Delta F1 after adversarial training |
-|---|---:|---:|---|---:|
-| GraphSAGE | 0.9712 | 1.0000 | full static test, 3312 windows / 32804 attack edges | 0.0041 |
-| GAT | 0.9534 | 1.0000 | full static test, 3312 windows / 35113 attack edges | 0.0087 |
-| E-GraphSAGE | 0.9708 | 1.0000 | full static test, 3312 windows / 32993 attack edges | null |
-| TGAT | 0.9475 | 1.0000 | sampled temporal, 32 test batches / 256 warm-up batches | null |
-| TGN | 0.9463 | 0.9989 | sampled temporal, 32 test batches / 256 warm-up batches | null |
-| Ensemble (3-model) | 0.9700 | null | clean-only soft vote (GraphSAGE + GAT + E-GraphSAGE) | null |
+| 類別 | 模型 | 定位 |
+|------|------|------|
+| 靜態基線 | GraphSAGE, GAT | 快速訓練/推論，Web Demo 主要模型 |
+| 時序模型 | TGAT, TGN | 連續時間圖行為的研究目標 |
+| 靜態集成 | GraphSAGE + GAT | 加權軟投票的 API 推論模式 |
 
-Interpretation:
-
-- GraphSAGE is currently the strongest clean static model by recorded F1 (0.9712).
-- E-GraphSAGE is nearly identical to GraphSAGE on weighted F1 (0.9708) after only 30 epochs, and achieves the highest Macro F1 (0.4681) of any individual model, suggesting better minority-class handling from edge-feature-aware message passing.
-- GAT is behind GraphSAGE on clean F1 but improves more from adversarial training in the metrics file.
-- The 3-model ensemble (GraphSAGE + GAT + E-GraphSAGE) reaches 0.9700 F1 with learned validation-based weights, improving over the old 2-model ensemble (0.9670).
-- TGAT and TGN have strong temporal results but do not beat the current static baselines.
-- Adversarial training improved both static models in the latest recorded experiments.
-- Static `dr_under_cpgd_eps01` is now a full-test sweep. Temporal DR is implemented with constrained message-space C-PGD, but the recorded run is bounded because full temporal replay is expensive.
-- E-GraphSAGE has full C-PGD DR = 1.0000 (full 3312-window test sweep), showing robustness comparable to GraphSAGE and GAT.
+> E-GraphSAGE 模型程式碼已實作（`src/models/egraphsage.py`），但目前無正式 checkpoint 與評估指標，列入未來工作。
 
 ---
 
-## 3. Static Models
+## 2. 實驗結果總覽
+
+所有模型超參數均由 Optuna（TPE sampler + MedianPruner）搜索最佳化。評估指標來自 `data/metrics/reliability.json`。
+
+### 2.1 Clean 效能
+
+靜態模型在 ~397K flows / 3312 windows 的測試集上評估；時序模型在 ~508K 事件上評估。
+
+| 模型 | Weighted F1 | Macro F1 | Precision | Recall | ROC-AUC |
+|------|:----------:|:--------:|:---------:|:------:|:-------:|
+| **GraphSAGE** | **0.9773** | **0.5735** | 0.9818 | 0.9742 | 0.9974 |
+| GAT | 0.9585 | 0.4036 | 0.9686 | 0.9526 | 0.9932 |
+| TGAT | 0.9475 | 0.3643 | 0.9632 | 0.9391 | 0.9963 |
+| TGN | 0.9463 | 0.3438 | 0.9610 | 0.9351 | 0.9960 |
+| Ensemble | 0.9767 | 0.5620 | 0.9819 | 0.9735 | 0.9970 |
+
+### 2.2 對抗魯棒性（C-PGD）
+
+| 模型 | C-PGD DR (ε=0.1, 40 步) | 測試範圍 | 攻擊邊數 |
+|------|:------------------------:|----------|:--------:|
+| GraphSAGE | 1.0000 | 全量靜態測試，3312 windows | 31,869 |
+| GAT | 1.0000 | 全量靜態測試，3312 windows | 35,910 |
+| TGAT | 0.9979 | 全量時序測試 | 110,352 |
+| TGN | 0.9965 | 全量時序測試 | 110,491 |
+
+### 2.3 對抗式訓練（Adversarial Training）
+
+時序模型使用 C-PGD 對抗式訓練（ε=0.1, 10 步, ratio=0.3）：
+
+| 模型 | Clean F1 | Adv F1 | ΔF1 | Adv ROC-AUC | Adv Macro F1 |
+|------|:--------:|:------:|:---:|:-----------:|:------------:|
+| TGAT | 0.9475 | 0.8938 | -0.0537 | 0.9686 | 0.1904 |
+| TGN | 0.9463 | 0.9282 | **-0.0181** | 0.9941 | 0.2824 |
+
+> 靜態模型（GraphSAGE、GAT）的對抗式訓練尚未以 Optuna 最佳參數正式執行，列入未來工作。
+
+---
+
+## 3. 靜態模型
 
 ### 3.1 GraphSAGE
 
-Configuration:
+**Optuna 最佳組態**（50 trials, val macro_f1=0.9733）：
 
 ```text
-num_layers: 3
+num_layers: 2
 hidden_dim: 256
-dropout: 0.3
+dropout: 0.0
 aggregation: mean
-loss: FocalLoss(gamma=2.0) with class weights
+lr: 0.00124
+focal_gamma: 1.0
+oversample_factor: 20
+class_weight_strategy: sqrt_inverse
+scheduler: cosine
 ```
 
-Current results:
+測試結果：
 
-| Run | Test F1 | Precision | Recall | ROC-AUC |
-|---|---:|---:|---:|---:|
-| Clean | 0.9712 | 0.9792 | 0.9660 | 0.9992 |
-| C-PGD adversarial training | 0.9753 | 0.9803 | 0.9727 | 0.9997 |
+| 指標 | 數值 |
+|------|:----:|
+| Weighted F1 | 0.9773 |
+| Macro F1 | 0.5735 |
+| Precision | 0.9818 |
+| Recall | 0.9742 |
+| ROC-AUC | 0.9974 |
+| C-PGD DR | 1.0000 |
 
-Adversarial training setup from log:
-
-```text
-epsilon = 0.100
-steps = 10
-ratio = 0.30
-epochs = 30
-best val_f1 = 0.9764 at epoch 30
-test f1 = 0.9753
-```
-
-Observations:
-
-- The proxy-node static graph construction is now effective enough for high F1.
-- GraphSAGE is the best currently recorded model overall.
-- Adversarial training gives a small but consistent improvement: +0.0041 F1 in `reliability.json`.
+觀察：
+- GraphSAGE 在所有指標上均為最佳個別模型。
+- Optuna 發現淺層（2 層）優於預設的 3 層，且 dropout=0.0 最佳。
+- 高 `oversample_factor=20` 對稀有攻擊類別（Worms, Backdoor, Analysis）的召回率至關重要。
+- `sqrt_inverse` 類別權重策略優於 `inverse` 和 `effective`。
 
 ### 3.2 GAT
 
-Configuration:
+**Optuna 最佳組態**（13 trials, val macro_f1=0.9674）：
 
 ```text
 num_layers: 3
-hidden_dim: 256
+hidden_dim: 128
 num_heads: 4
-dropout: 0.3
-loss: FocalLoss(gamma=2.0) with class weights
+dropout: 0.4
+lr: 0.00288
+focal_gamma: 1.0
+oversample_factor: 3
+class_weight_strategy: sqrt_inverse
+scheduler: cosine
 ```
 
-Current results:
+測試結果：
 
-| Run | Test F1 | Precision | Recall | ROC-AUC |
-|---|---:|---:|---:|---:|
-| Clean | 0.9534 | 0.9729 | 0.9433 | 0.9963 |
-| C-PGD adversarial training | 0.9622 | 0.9696 | 0.9581 | 0.9965 |
+| 指標 | 數值 |
+|------|:----:|
+| Weighted F1 | 0.9585 |
+| Macro F1 | 0.4036 |
+| Precision | 0.9686 |
+| Recall | 0.9526 |
+| ROC-AUC | 0.9932 |
+| C-PGD DR | 1.0000 |
 
-Adversarial training setup from log:
-
-```text
-epsilon = 0.100
-steps = 10
-ratio = 0.30
-epochs = 30
-best val_f1 = 0.9647 at epoch 27
-test f1 = 0.9622
-```
-
-Observations:
-
-- GAT remains competitive but is below GraphSAGE in the current result set.
-- Adversarial training improves GAT by +0.0087 F1 in `reliability.json`, a larger delta than GraphSAGE.
-- Attention does not currently translate into better aggregate detection metrics, but it remains useful for explanation-oriented UI features.
-
-### 3.3 E-GraphSAGE
-
-Configuration:
-
-```text
-num_layers: 3
-hidden_dim: 256
-dropout: 0.3
-aggregation: mean
-loss: FocalLoss(gamma=2.0) with class weights
-```
-
-Current 30-epoch result:
-
-| Run | Test F1 | Precision | Recall | ROC-AUC | Macro F1 |
-|---|---:|---:|---:|---:|---:|
-| Clean | 0.9708 | 0.9784 | 0.9665 | 0.9991 | 0.4681 |
-
-Architecture:
-
-E-GraphSAGE (Lo et al., IEEE NOMS 2022) modifies message passing to include edge features directly: `m_{u→v} = W·concat(h_u, e_{uv})`. This is a natural fit for NIDS where edge attributes (flow features) carry the primary detection signal. The implementation uses PyG's `MessagePassing` base with a custom `message()` that concatenates source node embeddings with edge attributes before projection.
-
-Observations:
-
-- E-GraphSAGE matches GraphSAGE on weighted F1 (0.9708 vs 0.9712) after only 30 epochs.
-- Achieves the highest Macro F1 (0.4681) of any individual model, beating GraphSAGE (0.4657), indicating better minority-class detection.
-- Recall (0.9665) slightly exceeds GraphSAGE (0.9660), consistent with edge-feature-aware aggregation catching more attack patterns.
-- C-PGD robustness is identical to GraphSAGE (DR = 1.0000 on full test).
-- Adversarial training has not yet been evaluated for E-GraphSAGE.
+觀察：
+- GAT 在 weighted F1 上落後 GraphSAGE，但 attention 機制對可解釋性 UI 有價值。
+- Optuna 選擇較小的 hidden_dim=128（vs GraphSAGE 的 256）和較高的 dropout=0.4。
+- 較低的 oversample_factor=3 暗示 GAT 對過採樣的敏感度不同。
 
 ---
 
-## 4. Temporal Models
+## 4. 時序模型
 
 ### 4.1 TGAT
 
-Configuration:
+**Optuna 最佳組態**（15 trials × 15 epochs, 20% subsample, val macro_f1=0.1917）：
 
 ```text
-hidden_dim: 172
-heads: 2
+hidden_dim: 256
+heads: 4
 n_neighbors: 20
-loss: FocalLoss(gamma=2.0) with class weights
+lr: 0.0042
+focal_gamma: 1.0
+oversample_factor: 13
+class_weight_strategy: effective
+batch_size: 200
 ```
 
-Current 30-epoch result:
+測試結果：
 
-| Best val epoch | Test F1 | Precision | Recall | ROC-AUC |
-|---:|---:|---:|---:|---:|
-| 23 | 0.9475 | 0.9632 | 0.9391 | 0.9963 |
+| 指標 | 數值 |
+|------|:----:|
+| Weighted F1 | 0.9475 |
+| Macro F1 | 0.3643 |
+| Precision | 0.9632 |
+| Recall | 0.9391 |
+| ROC-AUC | 0.9963 |
+| C-PGD DR | 0.9979 |
+| Adv ΔF1 | -0.0537 |
 
-Observations:
-
-- TGAT trains successfully on temporal `TemporalData` and reaches strong test ROC-AUC.
-- Test F1 is slightly lower than the current static baselines.
-- Training time is materially higher than static models because temporal batches and memory warm-up/replay dominate runtime.
+觀察：
+- TGAT 的 stateless attention 機制在對抗訓練下穩定性不足（ΔF1=-0.0537）。
+- 在 Generic 類上表現突出（F1=0.9782），因 Generic 佔時序資料的大量事件。
+- Backdoor 類完全無法偵測（F1=0.0），受限於稀有類別的時序稀疏性。
+- Optuna 搜索受 20% subsampling 限制，val macro_f1=0.1917 可能低估全量資料潛力。
 
 ### 4.2 TGN
 
-Configuration:
+**Optuna 最佳組態**（15 trials × 15 epochs, 20% subsample, val macro_f1=0.1883）：
 
 ```text
-memory_dim: 172
-time_dim: 64
 hidden_dim: 256
-num_neighbors: 20
-embedding_module: graph_attention
-dropout: 0.1
-loss: FocalLoss(gamma=2.0) with class weights
+memory_dim: 100
+num_neighbors: 30
+lr: 0.0027
+focal_gamma: 1.0
+oversample_factor: 12
+class_weight_strategy: effective
+batch_size: 200
 ```
 
-Current 30-epoch result:
+測試結果：
 
-| Best val epoch | Test F1 | Precision | Recall | ROC-AUC |
-|---:|---:|---:|---:|---:|
-| 23 | 0.9463 | 0.9610 | 0.9351 | 0.9960 |
+| 指標 | 數值 |
+|------|:----:|
+| Weighted F1 | 0.9463 |
+| Macro F1 | 0.3438 |
+| Precision | 0.9610 |
+| Recall | 0.9351 |
+| ROC-AUC | 0.9960 |
+| C-PGD DR | 0.9965 |
+| Adv ΔF1 | **-0.0181** |
 
-Observations:
-
-- TGN is close to TGAT but slightly behind in the current run.
-- Memory warm-up is used before final test evaluation by replaying the train split.
-- The current result does not yet support the hypothesis that TGN memory beats static proxy graphs on this dataset/configuration.
-
----
-
-## 5. Key Comparison
-
-| Comparison | Current finding |
-|---|---|
-| GraphSAGE vs GAT | GraphSAGE is ahead on clean F1: 0.9712 vs 0.9534. |
-| GraphSAGE vs E-GraphSAGE | Nearly identical weighted F1 (0.9712 vs 0.9708). E-GraphSAGE has higher Macro F1 (0.4681 vs 0.4657). |
-| TGAT vs TGN | TGAT is slightly ahead: 0.9475 vs 0.9463. |
-| Static vs temporal | Static models currently outperform TGAT/TGN on F1. |
-| Clean vs adversarial training | Static adversarial training improves F1 for both GraphSAGE and GAT. |
-| 3-model ensemble | Learned-weight voting (GraphSAGE + GAT + E-GraphSAGE) reaches 0.9700 F1, above the old 2-model ensemble (0.9670). |
-| Attention value | GAT/TGAT attention is useful architecturally, but not currently better than GraphSAGE on aggregate metrics. |
-| Edge-feature awareness | E-GraphSAGE's direct edge-feature message passing yields the best Macro F1, suggesting edge features help with minority attack classes. |
-
-Current ranking by recorded test F1:
-
-1. GraphSAGE + adversarial training: 0.9753
-2. GraphSAGE clean: 0.9712
-3. E-GraphSAGE clean: 0.9708
-4. Ensemble (3-model): 0.9700
-5. GAT + adversarial training: 0.9622
-6. GAT clean: 0.9534
-7. TGAT: 0.9475
-8. TGN: 0.9463
+觀察：
+- TGN 的 GRU-based memory 在對抗訓練下顯著優於 TGAT（ΔF1 僅 -0.0181 vs -0.0537）。
+- 對抗訓練後 ROC-AUC 維持 0.9941，顯示 memory 機制對擾動的容忍度高。
+- Optuna 選擇 num_neighbors=30（TGAT 為 20），暗示 TGN 受益於更大的鄰居取樣。
+- 同樣受 20% subsampling 限制。
 
 ---
 
-## 6. Notes on Historical Results
+## 5. 關鍵比較
 
-Older logs from 2026-06-13 show much lower static-model F1 values around 0.29-0.33. Those runs used earlier preprocessing/settings, including 39 edge features and short CPU test runs. They should not be mixed with the current 42-feature static pipeline and latest checkpoints.
+| 比較 | 發現 |
+|------|------|
+| GraphSAGE vs GAT | GraphSAGE 在 weighted F1（0.9773 vs 0.9585）和 macro F1（0.5735 vs 0.4036）均領先。 |
+| TGAT vs TGN | Clean F1 接近（0.9475 vs 0.9463），但 TGN 在對抗魯棒性上明顯優於 TGAT。 |
+| 靜態 vs 時序 | 靜態模型在 clean F1 上優於時序模型。時序模型在 Generic 類（大量時序事件）上有優勢。 |
+| 對抗式訓練 | TGN 的 memory 機制提供最佳對抗穩定性（ΔF1=-0.0181）。 |
+| Ensemble | 2-model 加權投票（GraphSAGE 0.504 + GAT 0.496）達到 F1=0.9767。 |
+| 類別權重策略 | 靜態模型偏好 `sqrt_inverse`；時序模型偏好 `effective`。 |
+| Focal gamma | 四個模型一致發現 γ=1.0 優於預設的 γ=2.0。 |
 
-This document treats the 2026-06-14 and 2026-06-15 runs plus `data/metrics/reliability.json` as the current authoritative result set.
+### 效能排名（Weighted F1）
+
+1. GraphSAGE: 0.9773
+2. Ensemble: 0.9767
+3. GAT: 0.9585
+4. TGAT: 0.9475
+5. TGN: 0.9463
+
+### 效能排名（Macro F1）
+
+1. GraphSAGE: 0.5735
+2. Ensemble: 0.5620
+3. GAT: 0.4036
+4. TGAT: 0.3643
+5. TGN: 0.3438
 
 ---
 
-## 7. Recommended Next Experiments
+## 6. Optuna 搜索空間與發現
 
-1. Run a full temporal C-PGD sweep if sufficient compute is available; the current temporal DR is a bounded run with 256 warm-up batches and 32 attacked test batches.
-2. Add feature-alignment or source-scaler reuse for cross-dataset validation. The tracked demo CSV run is skipped because its 39-feature schema does not match the current 42-feature checkpoints.
-3. Compare static 120-second offline training against 60-second web inference windows to quantify the deployment mismatch.
-4. Run adversarial training on E-GraphSAGE to see if edge-feature-aware message passing yields stronger robust improvement than standard GraphSAGE.
-5. Evaluate GraphMixer / SimpleDyG as lightweight temporal alternatives to TGAT/TGN.
+### 共用搜索空間
 
-Completed (previously listed):
+| 參數 | 範圍 |
+|------|------|
+| lr | 1e-4 ~ 1e-2（log scale） |
+| focal_gamma | 0.5 ~ 3.0（步長 0.5） |
+| oversample_factor | 1 ~ 20 |
+| weight_strategy | inverse, sqrt_inverse, effective |
 
-- ~~Per-class recall and confusion matrices~~ — Implemented in `compute_reliability_metrics.py` (per_class field in reliability.json).
-- ~~Multi-seed evaluation~~ — Implemented in `scripts/multi_seed_eval.py` with configurable seed list and statistical aggregation.
-- ~~Validation-based ensemble weighting~~ — Implemented in `EnsembleModel.from_validation()` with learned weights (GraphSAGE: 0.335, GAT: 0.330, E-GraphSAGE: 0.335).
+### 靜態模型搜索空間
+
+| 參數 | 範圍 |
+|------|------|
+| hidden_dim | 128, 256, 512 |
+| num_layers | 2 ~ 4 |
+| dropout | 0.0 ~ 0.5（步長 0.1） |
+| batch_size | 16, 32, 64 |
+| num_heads（GAT） | 2, 4, 8 |
+| aggregation（GraphSAGE） | mean, max |
+
+### 時序模型搜索空間
+
+| 參數 | 範圍 |
+|------|------|
+| hidden_dim | 64, 128, 172, 256 |
+| n_neighbors | 10, 20, 30 |
+| batch_size | 100, 200, 400 |
+| heads（TGAT） | 1, 2, 4 |
+| memory_dim（TGN） | 64, 100, 128 |
+
+### 搜索發現
+
+- 靜態模型偏好 `sqrt_inverse` 類別權重；時序模型偏好 `effective`。
+- 高 `oversample_factor`（9-20）對稀有類別的召回率至關重要。
+- 較低的 `focal_gamma`（1.0）優於預設的 2.0，四個模型一致。
+- GraphSAGE 淺層（2 層）優於深層；GAT 則 3 層表現較好。
+- 時序模型最佳 `hidden_dim=256`，`n_neighbors=20-30`。
+- 時序模型 Optuna 搜索使用 20% 資料子採樣以控制計算成本。
 
 ---
 
-## 8. Model Roadmap
+## 7. 歷史紀錄
 
-Near term:
+### Optuna 調參前（~2026-06-15）
 
-- Keep GraphSAGE as the main static baseline and web-demo default.
-- E-GraphSAGE is now available as a near-equivalent alternative with better minority-class metrics; consider as default if Macro F1 matters more than weighted F1.
-- Keep GAT for attention-based interpretation and adversarial-training comparison.
-- Keep TGAT/TGN as research models, but avoid claiming temporal superiority until stronger results appear.
+| 模型 | 舊 F1 | 新 F1 | 改善 |
+|------|:-----:|:-----:|:----:|
+| GraphSAGE | 0.9712 | 0.9773 | +0.0061 |
+| GAT | 0.9534 | 0.9585 | +0.0051 |
+| TGAT | 0.9475 | 0.9475 | 持平 |
+| TGN | 0.9463 | 0.9463 | 持平 |
 
-Future candidates:
+> 靜態模型透過 Optuna 調參顯著提升；時序模型主要改善了內部超參數（hidden_dim 172→256）但 weighted F1 未變。
 
-- GraphMixer/SimpleDyG for faster temporal aggregation.
-- DyGFormer for co-occurrence-aware temporal modeling.
+### 更早期紀錄
+
+2026-06-13 的日誌顯示靜態模型 F1 僅 0.29-0.33，使用了 39 特徵和短期 CPU 測試。這些結果不應與目前 42 特徵管線的結果混合比較。
+
+---
+
+## 8. 建議的後續實驗
+
+### 待執行
+
+1. **靜態模型對抗式訓練** — 使用 Optuna 最佳參數執行 GraphSAGE/GAT 的 C-PGD 對抗訓練，量化 ΔF1。
+2. **時序模型全量 Optuna** — 在全量資料上執行 TGAT/TGN Optuna 搜索（目前僅用 20%）。
+3. **E-GraphSAGE 完整評估** — 以 Optuna 搜索最佳參數訓練並評估，含對抗魯棒性。
+4. **輕量時序替代方案** — 評估 GraphMixer / SimpleDyG 作為 TGAT/TGN 的快速替代。
+
+### 已完成
+
+- ~~Per-class recall 與 confusion matrix~~ — 已實作於 `compute_reliability_metrics.py`。
+- ~~驗證集加權 ensemble~~ — 已實作 `EnsembleModel.from_validation()`。
+- ~~Optuna 超參數搜索（4 模型）~~ — GraphSAGE 50 trials, GAT 13 trials, TGAT 15 trials, TGN 15 trials。
+- ~~TGAT/TGN 對抗式訓練~~ — 完成，TGN 對抗穩定性明顯優於 TGAT。
+
+---
+
+## 9. 模型路線圖
+
+**近期：**
+- GraphSAGE 作為主要靜態基線與 Web Demo 預設模型。
+- GAT 用於 attention-based 可解釋性和對抗訓練比較。
+- TGN 作為時序模型首選（對抗穩定性最佳）。
+- Ensemble 提供穩定的雙模型投票推論。
+
+**未來：**
+- E-GraphSAGE 邊特徵感知模型的正式評估。
+- GraphMixer/SimpleDyG 輕量時序方案。
+- DyGFormer 共現感知時序建模。
