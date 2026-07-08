@@ -1,8 +1,8 @@
 # 模型選型：GNN 架構於 NIDS 之比較
 
-**版本：** 2.0
-**日期：** 2026-07-07
-**範圍：** GraphSAGE、GAT、TGAT、TGN 在 NF-UNSW-NB15-v2 上的完整實驗比較，含 Optuna 超參數搜索與對抗式訓練。
+**版本：** 2.1
+**日期：** 2026-07-09
+**範圍：** GraphSAGE、GAT、TGAT、TGN 在 NF-UNSW-NB15-v2 上的完整實驗比較，含 Optuna 超參數搜索、靜態與時序模型對抗式訓練。
 
 ---
 
@@ -36,7 +36,7 @@
 |------|:----------:|:--------:|:---------:|:------:|:-------:|
 | **GraphSAGE** | **0.9773** | **0.5735** | 0.9818 | 0.9742 | 0.9974 |
 | GAT | 0.9585 | 0.4036 | 0.9686 | 0.9526 | 0.9932 |
-| TGAT | 0.9475 | 0.3643 | 0.9632 | 0.9391 | 0.9963 |
+| TGAT | 0.8963 | 0.3127 | 0.9478 | 0.8618 | 0.9912 |
 | TGN | 0.9463 | 0.3438 | 0.9610 | 0.9351 | 0.9960 |
 | Ensemble | 0.9767 | 0.5620 | 0.9819 | 0.9735 | 0.9970 |
 
@@ -46,19 +46,21 @@
 |------|:------------------------:|----------|:--------:|
 | GraphSAGE | 1.0000 | 全量靜態測試，3312 windows | 31,869 |
 | GAT | 1.0000 | 全量靜態測試，3312 windows | 35,910 |
-| TGAT | 0.9979 | 全量時序測試 | 110,352 |
+| TGAT | 0.9684 | 全量時序測試 | 110,352 |
 | TGN | 0.9965 | 全量時序測試 | 110,491 |
 
 ### 2.3 對抗式訓練（Adversarial Training）
 
-時序模型使用 C-PGD 對抗式訓練（ε=0.1, 10 步, ratio=0.3）：
+使用 C-PGD 對抗式訓練（ε=0.1, 10 步, ratio=0.3）：
 
 | 模型 | Clean F1 | Adv F1 | ΔF1 | Adv ROC-AUC | Adv Macro F1 |
 |------|:--------:|:------:|:---:|:-----------:|:------------:|
-| TGAT | 0.9475 | 0.8938 | -0.0537 | 0.9686 | 0.1904 |
-| TGN | 0.9463 | 0.9282 | **-0.0181** | 0.9941 | 0.2824 |
+| GraphSAGE | 0.9773 | 0.9765 | **-0.0008** | — | — |
+| GAT | 0.9585 | 0.9699 | **+0.0114** | — | — |
+| TGN | 0.9463 | 0.7635 | -0.1828 | 0.8470 | 0.1739 |
+| TGAT | 0.8963 | — | — | — | — |
 
-> 靜態模型（GraphSAGE、GAT）的對抗式訓練尚未以 Optuna 最佳參數正式執行，列入未來工作。
+> 靜態模型在對抗式訓練下幾乎無損（ΔF1 在 ±0.012 以內）。TGN 的 GRU-based memory 對擾動梯度敏感，對抗訓練後 F1 下降 0.1828。TGAT 對抗式訓練因 GPU 資源限制暫緩。
 
 ---
 
@@ -148,23 +150,23 @@ class_weight_strategy: effective
 batch_size: 200
 ```
 
-測試結果：
+測試結果（pre-Optuna checkpoint, hidden_dim=172）：
 
 | 指標 | 數值 |
 |------|:----:|
-| Weighted F1 | 0.9475 |
-| Macro F1 | 0.3643 |
-| Precision | 0.9632 |
-| Recall | 0.9391 |
-| ROC-AUC | 0.9963 |
-| C-PGD DR | 0.9979 |
-| Adv ΔF1 | -0.0537 |
+| Weighted F1 | 0.8963 |
+| Macro F1 | 0.3127 |
+| Precision | 0.9478 |
+| Recall | 0.8618 |
+| ROC-AUC | 0.9912 |
+| C-PGD DR | 0.9684 |
+| Adv ΔF1 | — |
 
 觀察：
-- TGAT 的 stateless attention 機制在對抗訓練下穩定性不足（ΔF1=-0.0537）。
-- 在 Generic 類上表現突出（F1=0.9782），因 Generic 佔時序資料的大量事件。
+- Optuna 調參後的 hidden_dim=256 版本在全量資料上未顯著優於 pre-Optuna（hidden_dim=172），故保留 pre-Optuna checkpoint。
+- 在 Generic 類上表現突出（F1=0.9771），因 Generic 佔時序資料的大量事件。
 - Backdoor 類完全無法偵測（F1=0.0），受限於稀有類別的時序稀疏性。
-- Optuna 搜索受 20% subsampling 限制，val macro_f1=0.1917 可能低估全量資料潛力。
+- 對抗式訓練因 GPU 資源限制暫緩。
 
 ### 4.2 TGN
 
@@ -191,11 +193,11 @@ batch_size: 200
 | Recall | 0.9351 |
 | ROC-AUC | 0.9960 |
 | C-PGD DR | 0.9965 |
-| Adv ΔF1 | **-0.0181** |
+| Adv ΔF1 | -0.1828 |
 
 觀察：
-- TGN 的 GRU-based memory 在對抗訓練下顯著優於 TGAT（ΔF1 僅 -0.0181 vs -0.0537）。
-- 對抗訓練後 ROC-AUC 維持 0.9941，顯示 memory 機制對擾動的容忍度高。
+- TGN 的 GRU-based memory 在對抗訓練下 F1 降幅顯著（ΔF1=-0.1828），macro_f1 從 0.3438 降至 0.1739。
+- 對抗訓練後 ROC-AUC 降至 0.8470，顯示 memory 更新機制對擾動梯度敏感。
 - Optuna 選擇 num_neighbors=30（TGAT 為 20），暗示 TGN 受益於更大的鄰居取樣。
 - 同樣受 20% subsampling 限制。
 
@@ -206,9 +208,9 @@ batch_size: 200
 | 比較 | 發現 |
 |------|------|
 | GraphSAGE vs GAT | GraphSAGE 在 weighted F1（0.9773 vs 0.9585）和 macro F1（0.5735 vs 0.4036）均領先。 |
-| TGAT vs TGN | Clean F1 接近（0.9475 vs 0.9463），但 TGN 在對抗魯棒性上明顯優於 TGAT。 |
-| 靜態 vs 時序 | 靜態模型在 clean F1 上優於時序模型。時序模型在 Generic 類（大量時序事件）上有優勢。 |
-| 對抗式訓練 | TGN 的 memory 機制提供最佳對抗穩定性（ΔF1=-0.0181）。 |
+| TGAT vs TGN | TGN clean F1（0.9463）顯著優於 TGAT（0.8963）。兩者在對抗訓練下均有明顯降幅。 |
+| 靜態 vs 時序 | 靜態模型在 clean F1 和對抗穩定性上均優於時序模型。時序模型在 Generic 類上有優勢。 |
+| 對抗式訓練 | 靜態模型幾乎無損（ΔF1 ±0.012 以內）；TGN 降幅較大（ΔF1=-0.1828）。 |
 | Ensemble | 2-model 加權投票（GraphSAGE 0.504 + GAT 0.496）達到 F1=0.9767。 |
 | 類別權重策略 | 靜態模型偏好 `sqrt_inverse`；時序模型偏好 `effective`。 |
 | Focal gamma | 四個模型一致發現 γ=1.0 優於預設的 γ=2.0。 |
@@ -218,16 +220,16 @@ batch_size: 200
 1. GraphSAGE: 0.9773
 2. Ensemble: 0.9767
 3. GAT: 0.9585
-4. TGAT: 0.9475
-5. TGN: 0.9463
+4. TGN: 0.9463
+5. TGAT: 0.8963
 
 ### 效能排名（Macro F1）
 
 1. GraphSAGE: 0.5735
 2. Ensemble: 0.5620
 3. GAT: 0.4036
-4. TGAT: 0.3643
-5. TGN: 0.3438
+4. TGN: 0.3438
+5. TGAT: 0.3127
 
 ---
 
@@ -282,10 +284,10 @@ batch_size: 200
 |------|:-----:|:-----:|:----:|
 | GraphSAGE | 0.9712 | 0.9773 | +0.0061 |
 | GAT | 0.9534 | 0.9585 | +0.0051 |
-| TGAT | 0.9475 | 0.9475 | 持平 |
+| TGAT | 0.8963 | 0.8963 | 持平（保留 pre-Optuna） |
 | TGN | 0.9463 | 0.9463 | 持平 |
 
-> 靜態模型透過 Optuna 調參顯著提升；時序模型主要改善了內部超參數（hidden_dim 172→256）但 weighted F1 未變。
+> 靜態模型透過 Optuna 調參顯著提升；時序模型 Optuna 調參後（hidden_dim 172→256）在全量資料上未顯著改善，故保留 pre-Optuna checkpoint（hidden_dim=172）。先前 TGAT 報告的 0.9475 為驗證集 F1，實際測試集 F1 為 0.8963。
 
 ### 更早期紀錄
 
@@ -297,7 +299,7 @@ batch_size: 200
 
 ### 待執行
 
-1. **靜態模型對抗式訓練** — 使用 Optuna 最佳參數執行 GraphSAGE/GAT 的 C-PGD 對抗訓練，量化 ΔF1。
+1. **TGAT 對抗式訓練** — 完成 TGAT 的 C-PGD 對抗訓練（受 GPU 資源限制暫緩）。
 2. **時序模型全量 Optuna** — 在全量資料上執行 TGAT/TGN Optuna 搜索（目前僅用 20%）。
 3. **E-GraphSAGE 完整評估** — 以 Optuna 搜索最佳參數訓練並評估，含對抗魯棒性。
 4. **輕量時序替代方案** — 評估 GraphMixer / SimpleDyG 作為 TGAT/TGN 的快速替代。
@@ -307,7 +309,8 @@ batch_size: 200
 - ~~Per-class recall 與 confusion matrix~~ — 已實作於 `compute_reliability_metrics.py`。
 - ~~驗證集加權 ensemble~~ — 已實作 `EnsembleModel.from_validation()`。
 - ~~Optuna 超參數搜索（4 模型）~~ — GraphSAGE 50 trials, GAT 13 trials, TGAT 15 trials, TGN 15 trials。
-- ~~TGAT/TGN 對抗式訓練~~ — 完成，TGN 對抗穩定性明顯優於 TGAT。
+- ~~TGN 對抗式訓練~~ — 完成，ΔF1=-0.1828，memory 對擾動敏感。
+- ~~靜態模型對抗式訓練~~ — GraphSAGE ΔF1=-0.0008, GAT ΔF1=+0.0114，幾乎無損。
 
 ---
 
