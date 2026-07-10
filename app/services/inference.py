@@ -38,9 +38,10 @@ CHECKPOINT_FILES = {
     "egraphsage": CHECKPOINTS_DIR / "egraphsage_best.pt",
     "tgat": CHECKPOINTS_DIR / "tgat_best.pt",
     "tgn": CHECKPOINTS_DIR / "tgn_best.pt",
+    "dygformer": CHECKPOINTS_DIR / "dygformer_best.pt",
 }
 
-TEMPORAL_MODELS = {"tgat", "tgn"}
+TEMPORAL_MODELS = {"tgat", "tgn", "dygformer"}
 
 
 def _load_single_model(name: str, path: Path) -> BaseNIDSModel | None:

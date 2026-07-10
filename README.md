@@ -136,14 +136,14 @@ flowchart LR
 
 靜態模型在 NF-UNSW-NB15-v2 測試集（~397K flows, 3312 windows）上評估；時序模型在 508K 事件上評估。所有模型超參數由 Optuna（TPE sampler + MedianPruner）搜索。
 
-| 指標 | GraphSAGE | GAT | TGAT | TGN | Ensemble |
-|------|:---------:|:---:|:----:|:---:|:--------:|
-| **Weighted F1** | **0.9773** | 0.9585 | 0.8963 | 0.9463 | 0.9767 |
-| **Macro F1** | **0.5735** | 0.4036 | 0.3127 | 0.3438 | 0.5615 |
-| Precision | 0.9818 | 0.9686 | 0.9478 | 0.9610 | 0.9819 |
-| Recall | 0.9742 | 0.9526 | 0.8618 | 0.9351 | 0.9735 |
-| ROC-AUC | 0.9974 | 0.9932 | 0.9912 | 0.9960 | 0.9970 |
-| C-PGD DR (ε=0.1) | 1.0000 | 1.0000 | 0.9684 | 0.9965 | — |
+| 指標 | GraphSAGE | GAT | TGAT | TGN | DyGFormer | Ensemble |
+|------|:---------:|:---:|:----:|:---:|:---------:|:--------:|
+| **Weighted F1** | **0.9773** | 0.9585 | 0.8963 | 0.9463 | 0.9249 | 0.9767 |
+| **Macro F1** | **0.5735** | 0.4036 | 0.3127 | 0.3438 | 0.3166 | 0.5615 |
+| Precision | 0.9818 | 0.9686 | 0.9478 | 0.9610 | 0.9692 | 0.9819 |
+| Recall | 0.9742 | 0.9526 | 0.8618 | 0.9351 | 0.8950 | 0.9735 |
+| ROC-AUC | 0.9974 | 0.9932 | 0.9912 | 0.9960 | 0.9862 | 0.9970 |
+| C-PGD DR (ε=0.1) | 1.0000 | 1.0000 | 0.9684 | 0.9965 | — | — |
 
 > Ensemble 使用 GraphSAGE + GAT 加權軟投票（權重 0.50 / 0.50），在驗證集自動學習。
 
@@ -161,6 +161,7 @@ flowchart LR
 | GAT | 0.9585 | 0.9699 | **+0.0114** | 對抗訓練反而提升，注意力機制受益於擾動多樣性 |
 | TGN | 0.9463 | 0.7635 | -0.1828 | memory 更新對擾動梯度敏感，macro_f1=0.1739 |
 | TGAT | 0.8963 | — | — | GPU 資源限制，對抗式訓練待完成 |
+| DyGFormer | 0.9249 | — | — | 對抗式訓練待完成 |
 
 > 靜態模型（GraphSAGE/GAT）在對抗式訓練下展現極高穩定性，ΔF1 在 ±0.012 以內。TGN 的 GRU-based memory 在對抗訓練下降幅較大（ΔF1=-0.1828），macro_f1 從 0.3438 降至 0.1739，顯示 memory 更新機制對擾動梯度敏感。
 
@@ -206,12 +207,23 @@ uv run python train.py model=tgn data=temporal_default \
     model.hidden_dim=256 model.num_neighbors=30 model.memory_dim=100
 ```
 
+**DyGFormer**（手動消融實驗，Optuna subsample 不可行）：
+
+```bash
+uv run python train.py model=dygformer data=temporal_default \
+    train.lr=0.0005 train.focal_gamma=1.0 train.oversample_factor=13 \
+    train.class_weight_strategy=effective train.val_metric=macro_f1 \
+    train.scheduler=cosine train.patience=15 train.epochs=50 \
+    train.batch_size=200 model.patch_size=4 model.dropout=0.15
+```
+
 Optuna 搜索發現：
 - 靜態模型偏好 `sqrt_inverse` 類別權重；時序模型偏好 `effective`
 - 高 `oversample_factor`（9-20）對稀有類別的召回率至關重要
-- 較低的 `focal_gamma`（1.0）優於預設的 2.0，四個模型一致
+- 較低的 `focal_gamma`（1.0）優於預設的 2.0，五個模型一致
 - GraphSAGE 淺層（2 層）優於深層；GAT 則 3 層表現較好
-- 時序模型最佳 `hidden_dim=256`，`n_neighbors=20-30`
+- TGAT/TGN 最佳 `hidden_dim=256`；DyGFormer 最佳 `hidden_dim=172`（256 導致 NaN 發散）
+- DyGFormer 無法使用 Optuna 子採樣搜索（共現編碼需完整鄰居歷史）
 
 ### Per-Class F1 分解
 
@@ -245,7 +257,7 @@ Optuna 搜索發現：
 | Generic | 1,527 | 0.2844 | 0.0393 | **0.0690** |
 | Backdoor | 234 | 0.0218 | 0.1282 | **0.0372** |
 
-> **分析：** GraphSAGE 在所有攻擊類型上的 F1 均優於 GAT。4 種稀有攻擊類型（DoS, Backdoor, Analysis, Worms）合計不足測試集 0.5%，儘管召回率達 0.43-0.70，精確度因 Benign 類的假陽性而偏低。TGAT/TGN 在 Generic 類（大量 temporal 事件）上表現突出（F1>0.97），但其他攻擊類型受限於序列建模的稀疏性。
+> **分析：** GraphSAGE 在所有攻擊類型上的 F1 均優於 GAT。4 種稀有攻擊類型（DoS, Backdoor, Analysis, Worms）合計不足測試集 0.5%，儘管召回率達 0.43-0.70，精確度因 Benign 類的假陽性而偏低。時序模型（TGAT/TGN/DyGFormer）在 Generic 類上表現突出（F1>0.95），DyGFormer 在 Fuzzers（F1=0.3749）和 Reconnaissance（F1=0.3141）上優於其他時序模型。
 
 ---
 

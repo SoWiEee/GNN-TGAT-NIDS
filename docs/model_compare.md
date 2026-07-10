@@ -1,8 +1,8 @@
 # 模型選型：GNN 架構於 NIDS 之比較
 
-**版本：** 2.1
-**日期：** 2026-07-09
-**範圍：** GraphSAGE、GAT、TGAT、TGN 在 NF-UNSW-NB15-v2 上的完整實驗比較，含 Optuna 超參數搜索、靜態與時序模型對抗式訓練。
+**版本：** 3.0
+**日期：** 2026-07-10
+**範圍：** GraphSAGE、GAT、TGAT、TGN、DyGFormer 在 NF-UNSW-NB15-v2 上的完整實驗比較，含 Optuna 超參數搜索、靜態與時序模型對抗式訓練。
 
 ---
 
@@ -18,6 +18,7 @@
 |------|------|------|
 | 靜態基線 | GraphSAGE, GAT | 快速訓練/推論，Web Demo 主要模型 |
 | 時序模型 | TGAT, TGN | 連續時間圖行為的研究目標 |
+| 時序進階 | DyGFormer | Transformer-based 共現感知時序模型 |
 | 靜態集成 | GraphSAGE + GAT | 加權軟投票的 API 推論模式 |
 
 > E-GraphSAGE 模型程式碼已實作（`src/models/egraphsage.py`），但目前無正式 checkpoint 與評估指標，列入未來工作。
@@ -38,6 +39,7 @@
 | GAT | 0.9585 | 0.4036 | 0.9686 | 0.9526 | 0.9932 |
 | TGAT | 0.8963 | 0.3127 | 0.9478 | 0.8618 | 0.9912 |
 | TGN | 0.9463 | 0.3438 | 0.9610 | 0.9351 | 0.9960 |
+| DyGFormer | 0.9249 | 0.3166 | 0.9692 | 0.8950 | 0.9862 |
 | Ensemble | 0.9767 | 0.5620 | 0.9819 | 0.9735 | 0.9970 |
 
 ### 2.2 對抗魯棒性（C-PGD）
@@ -168,7 +170,60 @@ batch_size: 200
 - Backdoor 類完全無法偵測（F1=0.0），受限於稀有類別的時序稀疏性。
 - 對抗式訓練因 GPU 資源限制暫緩。
 
-### 4.2 TGN
+### 4.2 DyGFormer
+
+**手動調參最佳組態**（Optuna subsample 不可行，手動消融實驗）：
+
+```text
+hidden_dim: 172
+n_layers: 2
+n_heads: 2
+patch_size: 4
+n_neighbors: 20
+time_dim: 64
+dropout: 0.15
+lr: 0.0005
+focal_gamma: 1.0
+oversample_factor: 13
+class_weight_strategy: effective
+scheduler: cosine
+batch_size: 200
+```
+
+測試結果：
+
+| 指標 | 數值 |
+|------|:----:|
+| Weighted F1 | 0.9249 |
+| Macro F1 | 0.3166 |
+| Precision | 0.9692 |
+| Recall | 0.8950 |
+| ROC-AUC | 0.9862 |
+
+Per-class F1：
+
+| 類別 | Precision | Recall | F1 | Support |
+|------|:---------:|:------:|:--:|:-------:|
+| Benign | 1.0000 | 0.9379 | 0.9680 | 408,913 |
+| Generic | 0.9942 | 0.9212 | 0.9563 | 68,441 |
+| Fuzzers | 0.3490 | 0.4049 | 0.3749 | 6,711 |
+| Exploits | 0.8993 | 0.2154 | 0.3476 | 12,849 |
+| Reconnaissance | 0.2685 | 0.3782 | 0.3141 | 4,064 |
+| Shellcode | 0.0370 | 0.8636 | 0.0709 | 440 |
+| Analysis | 0.0275 | 0.6106 | 0.0525 | 678 |
+| DoS | 0.0695 | 0.0376 | 0.0488 | 5,160 |
+| Worms | 0.0119 | 0.8077 | 0.0235 | 52 |
+| Backdoor | 0.0048 | 0.0869 | 0.0090 | 702 |
+
+觀察：
+- DyGFormer（Yu et al., NeurIPS 2023）使用 Transformer 架構搭配共現編碼和時序 patching，為無狀態設計（無持久記憶體）。
+- **Optuna subsample 不可行**：DyGFormer 的 Transformer 架構在 20% 或 50% 子採樣下完全無法收斂（macro_f1<0.004），因為共現編碼和時序 patching 需要完整的鄰居歷史。這與 TGAT/TGN 不同（它們可用 subsample 搜索）。
+- **focal_gamma 敏感**：gamma<1.0 導致梯度爆炸（NaN），因 focal loss 梯度中 `(1-pt)^(gamma-1)` 項在 gamma<1 時會發散。gamma=1.5 收斂但效能退化（macro_f1=0.2432）。gamma=1.0 為最佳。
+- **hidden_dim=256 導致 NaN**：模型過大（1.48M 參數 vs 172 的 807K），在 lr=0.0005 下 epoch 2 即發散。
+- 在 Fuzzers、Reconnaissance 類別上表現相對於其他時序模型較好。
+- 整體效能介於 TGAT 和 TGN 之間。
+
+### 4.3 TGN
 
 **Optuna 最佳組態**（15 trials × 15 epochs, 20% subsample, val macro_f1=0.1883）：
 
@@ -208,7 +263,7 @@ batch_size: 200
 | 比較 | 發現 |
 |------|------|
 | GraphSAGE vs GAT | GraphSAGE 在 weighted F1（0.9773 vs 0.9585）和 macro F1（0.5735 vs 0.4036）均領先。 |
-| TGAT vs TGN | TGN clean F1（0.9463）顯著優於 TGAT（0.8963）。兩者在對抗訓練下均有明顯降幅。 |
+| TGAT vs TGN vs DyGFormer | TGN clean F1（0.9463）最佳，DyGFormer（0.9249）居中，TGAT（0.8963）最低。DyGFormer 無狀態設計較 TGN 穩定但效能略低。 |
 | 靜態 vs 時序 | 靜態模型在 clean F1 和對抗穩定性上均優於時序模型。時序模型在 Generic 類上有優勢。 |
 | 對抗式訓練 | 靜態模型幾乎無損（ΔF1 ±0.012 以內）；TGN 降幅較大（ΔF1=-0.1828）。 |
 | Ensemble | 2-model 加權投票（GraphSAGE 0.504 + GAT 0.496）達到 F1=0.9767。 |
@@ -221,7 +276,8 @@ batch_size: 200
 2. Ensemble: 0.9767
 3. GAT: 0.9585
 4. TGN: 0.9463
-5. TGAT: 0.8963
+5. DyGFormer: 0.9249
+6. TGAT: 0.8963
 
 ### 效能排名（Macro F1）
 
@@ -229,7 +285,8 @@ batch_size: 200
 2. Ensemble: 0.5620
 3. GAT: 0.4036
 4. TGN: 0.3438
-5. TGAT: 0.3127
+5. DyGFormer: 0.3166
+6. TGAT: 0.3127
 
 ---
 
@@ -271,8 +328,18 @@ batch_size: 200
 - 高 `oversample_factor`（9-20）對稀有類別的召回率至關重要。
 - 較低的 `focal_gamma`（1.0）優於預設的 2.0，四個模型一致。
 - GraphSAGE 淺層（2 層）優於深層；GAT 則 3 層表現較好。
-- 時序模型最佳 `hidden_dim=256`，`n_neighbors=20-30`。
-- 時序模型 Optuna 搜索使用 20% 資料子採樣以控制計算成本。
+- 時序模型最佳 `hidden_dim=256`（TGAT/TGN）或 `172`（DyGFormer），`n_neighbors=20-30`。
+- TGAT/TGN 的 Optuna 搜索使用 20% 資料子採樣；DyGFormer 因架構特性無法使用子採樣（見下）。
+
+### DyGFormer Optuna 搜索失敗分析
+
+DyGFormer 無法使用 Optuna 子採樣搜索，原因：
+
+1. **共現編碼依賴完整歷史**：DyGFormer 的 co-occurrence encoding 從鄰居歷史中計算節點共現矩陣，子採樣後鄰居歷史過於稀疏，導致共現信號消失。
+2. **時序 patching 需要足夠序列長度**：patch_size=4 要求每個節點至少有 4 個歷史鄰居，子採樣後大量節點不滿足此條件。
+3. **實驗驗證**：20% 子採樣 macro_f1=0.0024，50% 子採樣 macro_f1=0.0038，均完全無法收斂。TGAT/TGN 使用相同子採樣比例可正常搜索。
+
+替代方案：在全量資料上進行手動消融實驗（focal_gamma, hidden_dim），確認 gamma=1.0 + hidden_dim=172 為最佳組態。
 
 ---
 
@@ -311,6 +378,7 @@ batch_size: 200
 - ~~Optuna 超參數搜索（4 模型）~~ — GraphSAGE 50 trials, GAT 13 trials, TGAT 15 trials, TGN 15 trials。
 - ~~TGN 對抗式訓練~~ — 完成，ΔF1=-0.1828，memory 對擾動敏感。
 - ~~靜態模型對抗式訓練~~ — GraphSAGE ΔF1=-0.0008, GAT ΔF1=+0.0114，幾乎無損。
+- ~~DyGFormer 實作與調參~~ — 完成實作、訓練與消融實驗。Optuna subsample 不可行；手動確認 gamma=1.0 最佳。
 
 ---
 
@@ -325,4 +393,4 @@ batch_size: 200
 **未來：**
 - E-GraphSAGE 邊特徵感知模型的正式評估。
 - GraphMixer/SimpleDyG 輕量時序方案。
-- DyGFormer 共現感知時序建模。
+- DyGFormer 對抗式訓練與魯棒性評估。

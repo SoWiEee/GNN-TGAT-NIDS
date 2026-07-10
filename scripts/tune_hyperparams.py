@@ -8,6 +8,7 @@ Usage:
     uv run python scripts/tune_hyperparams.py --model gat --trials 50
     uv run python scripts/tune_hyperparams.py --model tgat --trials 30
     uv run python scripts/tune_hyperparams.py --model tgn --trials 30
+    uv run python scripts/tune_hyperparams.py --model dygformer --trials 30
 
     # Live dashboard (open http://localhost:8080 while running):
     uv run optuna-dashboard sqlite:///results/optuna.db
@@ -44,15 +45,17 @@ RESULTS_DIR = Path("results")
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 STATIC_MODELS = {"graphsage", "gat"}
-TEMPORAL_MODELS = {"tgat", "tgn"}
+TEMPORAL_MODELS = {"tgat", "tgn", "dygformer"}
 
 
 # ── Search space ──────────────────────────────────────────────────────────────
 
 def _suggest(trial: optuna.Trial, model_name: str) -> dict:
+    lr_lo, lr_hi = (1e-4, 1e-3) if model_name == "dygformer" else (1e-4, 1e-2)
+    gamma_hi = 2.0 if model_name == "dygformer" else 3.0
     params: dict = {
-        "lr": trial.suggest_float("lr", 1e-4, 1e-2, log=True),
-        "focal_gamma": trial.suggest_float("focal_gamma", 0.5, 3.0, step=0.5),
+        "lr": trial.suggest_float("lr", lr_lo, lr_hi, log=True),
+        "focal_gamma": trial.suggest_float("focal_gamma", 0.5, gamma_hi, step=0.5),
         "oversample_factor": trial.suggest_int("oversample_factor", 1, 20),
         "weight_strategy": trial.suggest_categorical(
             "weight_strategy", ["inverse", "sqrt_inverse", "effective"],
@@ -71,6 +74,19 @@ def _suggest(trial: optuna.Trial, model_name: str) -> dict:
                 raise optuna.TrialPruned()
         if model_name == "graphsage":
             params["aggregation"] = trial.suggest_categorical("aggregation", ["mean", "max"])
+    elif model_name == "dygformer":
+        params["hidden_dim"] = trial.suggest_categorical("hidden_dim", [128, 172, 256])
+        params["n_neighbors"] = trial.suggest_categorical("n_neighbors", [10, 20])
+        params["patch_size"] = trial.suggest_categorical("patch_size", [2, 5, 10])
+        if params["n_neighbors"] % params["patch_size"] != 0:
+            raise optuna.TrialPruned()
+        params["n_layers"] = trial.suggest_int("n_layers", 1, 2)
+        params["n_heads"] = trial.suggest_categorical("n_heads", [1, 2, 4])
+        if params["hidden_dim"] % params["n_heads"] != 0:
+            raise optuna.TrialPruned()
+        params["time_dim"] = trial.suggest_categorical("time_dim", [32, 64])
+        params["dropout"] = trial.suggest_float("dropout", 0.05, 0.25, step=0.05)
+        params["batch_size"] = trial.suggest_categorical("batch_size", [200, 400])
     else:
         params["hidden_dim"] = trial.suggest_categorical("hidden_dim", [64, 128, 172, 256])
         params["n_neighbors"] = trial.suggest_categorical("n_neighbors", [10, 20, 30])
@@ -118,6 +134,20 @@ def _build_model(model_name: str, params: dict, **kwargs):
             hidden_dim=params["hidden_dim"],
             heads=params["heads"],
             n_neighbors=params["n_neighbors"],
+        )
+    if model_name == "dygformer":
+        from src.models.dygformer import DyGFormerModel
+        return DyGFormerModel(
+            num_nodes=kwargs["num_nodes"],
+            raw_msg_dim=kwargs["n_edge"],
+            num_classes=kwargs["n_classes"],
+            hidden_dim=params["hidden_dim"],
+            time_dim=params.get("time_dim", 64),
+            n_neighbors=params["n_neighbors"],
+            n_layers=params["n_layers"],
+            n_heads=params["n_heads"],
+            patch_size=params["patch_size"],
+            dropout=params["dropout"],
         )
     from src.models.tgn import TGNModel
     return TGNModel(
@@ -339,7 +369,7 @@ def _objective_temporal(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="graphsage",
-                        choices=["graphsage", "gat", "tgat", "tgn"])
+                        choices=["graphsage", "gat", "tgat", "tgn", "dygformer"])
     parser.add_argument("--trials", type=int, default=50)
     parser.add_argument("--epochs", type=int, default=30,
                         help="Epochs per trial (shorter = faster search)")
